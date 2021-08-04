@@ -10,10 +10,10 @@ const socket = require("./Utils/socket");
 const {
     onUserJoined,
     onJoinWithUsers,
-    fetchRoomMessages,
     onMessageRecieved,
     deleteMessage,
 } = require("./Utils/eventHandlers");
+const { fetchRoomMessages } = require("./Utils/helpers");
 
 const app = express();
 app.use(function (req, res, next) {
@@ -37,7 +37,7 @@ const limiter = express_rate_limit({
 });
 const server = http.createServer(app);
 const io = socket(server);
-// app.use(limiter);
+app.use(limiter);
 app.use(express.json());
 app.use(cookie_parser(process.env.SECRET_KEY));
 

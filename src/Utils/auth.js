@@ -233,10 +233,10 @@ app.post("/update_user_details", (req, res) => {
                 if (user) {
                     const { username, name } = req.body;
                     let query = "";
-                    let token = "";
+                    let new_token = "";
                     if (username && name) {
                         query = `update users_table set username="${username}", name="${name}" where user_id="${user.user_id}"`;
-                        token = jwt.sign(
+                        new_token = jwt.sign(
                             {
                                 user_id: user.user_id,
                                 username,
@@ -247,7 +247,7 @@ app.post("/update_user_details", (req, res) => {
                         );
                     } else if (username) {
                         query = `update users_table set username="${username}" where user_id="${user.user_id}"`;
-                        token = jwt.sign(
+                        new_token = jwt.sign(
                             {
                                 user_id: user.user_id,
                                 username,
@@ -258,7 +258,7 @@ app.post("/update_user_details", (req, res) => {
                         );
                     } else if (name) {
                         query = `update users_table set name="${name}" where user_id="${user.user_id}"`;
-                        token = jwt.sign(
+                        new_token = jwt.sign(
                             {
                                 user_id: user.user_id,
                                 username: user.username,
@@ -279,11 +279,27 @@ app.post("/update_user_details", (req, res) => {
                             });
                             return;
                         }
-                        console.log("details updated", response.affectedRows);
-                        res.status(200).send({
-                            message: "User details updated",
-                            token,
-                        });
+                        console.log(
+                            "details updated",
+                            response.affectedRows,
+                            new_token,
+                            token
+                        );
+                        updateToken(new_token, user.user_id)
+                            .then(() => {
+                                res.status(200).send({
+                                    message: "User details updated",
+                                    new_token,
+                                });
+                                return;
+                            })
+                            .catch((err) => {
+                                console.log("error at update details", err);
+                                res.status(500).send({
+                                    error: "Internal error",
+                                });
+                                return;
+                            });
                     });
                 }
             })
