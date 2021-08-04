@@ -305,6 +305,24 @@ const fetchCommonRoomAndJoinedUsers = (my_user_id) => {
         );
     });
 };
+const deleteMessage = (room_id, message_id) => {
+    return new Promise((resolve, reject) => {
+        mysqlInstance.query(
+            `delete from messages_table where room_id="${room_id}" and message_id=${message_id}`,
+            (error, response) => {
+                if (error) {
+                    console.log("delete msg", error.message);
+                    reject({ error: error.message });
+                    return;
+                }
+                console.log("delete message", response.affectedRows);
+                fetchRoomMessages(room_id).then(({ messages }) => {
+                    resolve({ messages });
+                });
+            }
+        );
+    });
+};
 
 module.exports = {
     getUserDataFromJWT,
@@ -316,4 +334,5 @@ module.exports = {
     createAndJoinRoom,
     fetchCommonRoomAndJoinedUsers,
     fetchAllUsers,
+    deleteMessage,
 };

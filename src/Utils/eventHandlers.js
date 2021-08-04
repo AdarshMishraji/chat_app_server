@@ -5,6 +5,7 @@ const {
     createAndJoinRoom,
     fetchCommonRoomAndJoinedUsers,
     fetchAllUsers,
+    deleteMessage,
 } = require("./helpers");
 
 const onUserJoined = (token, socket) => {
@@ -45,6 +46,7 @@ const onJoinWithUsers = (user_id, token, socket, io) => {
                 io.to(room_id).emit("room_created_and_joined", {
                     message: "a room is created and you have joined",
                     room_id,
+                    type: "group",
                 });
                 fetchCommonRoomAndJoinedUsers(data.user_id).then(
                     ({ response }) => {
@@ -80,6 +82,7 @@ const onJoinWithUsers = (user_id, token, socket, io) => {
                                 message:
                                     "a room is created and you have joined",
                                 room_id,
+                                type: "duet",
                             });
                             fetchCommonRoomAndJoinedUsers(data.user_id).then(
                                 ({ response }) => {
@@ -142,20 +145,54 @@ const onMessageRecieved = (message, socket, io) => {
     );
 };
 
-const deleteMessage = (room_id, message_id) => {
+const onDeleteRoom = (room_id, token, socket, callback) => {
     return new Promise((resolve, reject) => {
         mysqlInstance.query(
-            `delete from messages_table where room_id="${room_id}" and message_id=${message_id}`,
-            (error, response) => {
-                if (error) {
-                    console.log("delete msg", error.message);
-                    reject({ error: error.message });
+            `select message_id from messages_table where room_id="${room_id}"`,
+            (e, r) => {
+                if (e) {
+                    reject({ error: e.message });
                     return;
                 }
-                console.log("delete message", response.affectedRows);
-                fetchRoomMessages(room_id).then(({ messages }) => {
-                    resolve({ messages });
-                });
+                if (r.length > 0) {
+                    reject({ error: "room is not empty" });
+                    return;
+                }
+
+                mysqlInstance.query(
+                    `delete from users_rooms_table where room_id = "${room_id}"`,
+                    (error1, response1) => {
+                        if (error1) {
+                            console.log("delete room", error1.message);
+                            reject({ error: error1.message });
+                            return;
+                        }
+                        console.log(
+                            "delete room affect1",
+                            response1.affectedRows
+                        );
+                        mysqlInstance.query(
+                            `delete from rooms_table where room_id = "${room_id}"`,
+                            (error2, response2) => {
+                                if (error2) {
+                                    console.log(
+                                        "delete room 2",
+                                        error2.message
+                                    );
+                                    reject({ error: error2.message });
+                                    return;
+                                }
+                                console.log(
+                                    "delete room affect1",
+                                    response2.affectedRows
+                                );
+                                callback({ message: "Room deleted" });
+                                onUserJoined(token, socket);
+                                resolve({ message: "Room deleted" });
+                            }
+                        );
+                    }
+                );
             }
         );
     });
@@ -166,4 +203,5 @@ module.exports = {
     onJoinWithUsers,
     onMessageRecieved,
     deleteMessage,
+    onDeleteRoom,
 };

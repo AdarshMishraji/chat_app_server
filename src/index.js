@@ -12,6 +12,7 @@ const {
     onJoinWithUsers,
     onMessageRecieved,
     deleteMessage,
+    onDeleteRoom,
 } = require("./Utils/eventHandlers");
 const { fetchRoomMessages } = require("./Utils/helpers");
 
@@ -83,6 +84,15 @@ io.on("connection", (socket) => {
                 callback({ messages });
             })
             .catch((e) => callback({ error: e }));
+    });
+    socket.on("delete_room", ({ room_id }, callback) => {
+        console.log("delete room", room_id);
+        onDeleteRoom(room_id, token, socket, callback)
+            .then(({ message }) => {
+                console.log(message);
+                socket.leave(room_id);
+            })
+            .catch((e) => callback({ message: e }));
     });
 });
 
