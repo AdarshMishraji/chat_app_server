@@ -1,5 +1,5 @@
 const express = require("express");
-const mysqlInstance = require("./db");
+const mysqlInstance = require("../Configs/db");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const { v4: uuidv4 } = require("uuid");
@@ -8,12 +8,13 @@ const {
     fetchUserFromUsername,
     updateToken,
     verifyToken,
+    sendMessageToAllOnUserSignup,
 } = require("./helpers");
 
 const app = express();
 
 app.post("/signup", (req, res) => {
-    const { name, username, password } = req.body;
+    const { name, username, password, fcm_token } = req.body;
     if (
         name &&
         username &&
@@ -30,7 +31,7 @@ app.post("/signup", (req, res) => {
                     return;
                 }
                 const token = jwt.sign(
-                    { user_id, name, username, password },
+                    { user_id, name, username, password, fcm_token },
                     process.env.SECRET_KEY
                 );
                 bcrypt
@@ -42,8 +43,8 @@ app.post("/signup", (req, res) => {
                             (error, encryptedPassword) => {
                                 mysqlInstance.query(
                                     `
-                insert into users_table (user_id, name, username, password, joined_at, jwt_token)
-                values ("${user_id}", "${name}", "${username}", "${encryptedPassword}", "${Date.now()}", "${token}")`,
+                insert into users_table (user_id, name, username, password, joined_at, jwt_token, fcm_token)
+                values ("${user_id}", "${name}", "${username}", "${encryptedPassword}", "${Date.now()}", "${token}", "${fcm_token}")`,
                                     (error2, response2, fields2) => {
                                         if (error2) {
                                             console.log(
@@ -59,6 +60,13 @@ app.post("/signup", (req, res) => {
                                             console.log(
                                                 "after signup",
                                                 response2.affectedRows
+                                            );
+                                            res.locals.io.emit("refresh_all", {
+                                                changed_by: user_id,
+                                            });
+                                            sendMessageToAllOnUserSignup(
+                                                username,
+                                                user_id
                                             );
                                             res.status(200).send({
                                                 message:
@@ -92,7 +100,7 @@ app.post("/signup", (req, res) => {
 });
 
 app.post("/login", (req, res) => {
-    const { username, password } = req.body;
+    const { username, password, fcm_token } = req.body;
     console.log(username, password);
     if (
         username &&
@@ -116,7 +124,7 @@ app.post("/login", (req, res) => {
                 const { user_id, username, password, name } = response1[0];
                 if (bcrypt.compare(password, response1[0].password)) {
                     const token = jwt.sign(
-                        { user_id, username, password, name },
+                        { user_id, username, password, name, fcm_token },
                         process.env.SECRET_KEY
                     );
                     updateToken(token, user_id)
@@ -191,10 +199,10 @@ app.post("/logout", (req, res) => {
 });
 
 app.post("/verify_token", (req, res) => {
-    const { token } = req.body;
+    const { token, fcm_token } = req.body;
     if (token && typeof token === "string") {
         console.log(token);
-        verifyToken(token)
+        verifyToken(token, fcm_token)
             .then(({ user, error }) => {
                 if (error) {
                     res.status(404).send({
@@ -242,6 +250,7 @@ app.post("/update_user_details", (req, res) => {
                                 username,
                                 password: user.password,
                                 name,
+                                fcm_token: user.fcm_token,
                             },
                             process.env.SECRET_KEY
                         );
@@ -253,6 +262,7 @@ app.post("/update_user_details", (req, res) => {
                                 username,
                                 password: user.password,
                                 name: user.name,
+                                fcm_token: user.fcm_token,
                             },
                             process.env.SECRET_KEY
                         );
@@ -264,6 +274,7 @@ app.post("/update_user_details", (req, res) => {
                                 username: user.username,
                                 password: user.password,
                                 name,
+                                fcm_token: user.fcm_token,
                             },
                             process.env.SECRET_KEY
                         );
@@ -287,6 +298,9 @@ app.post("/update_user_details", (req, res) => {
                         );
                         updateToken(new_token, user.user_id)
                             .then(() => {
+                                res.locals.io.emit("refresh_all", {
+                                    changed_by: user.user_id,
+                                });
                                 res.status(200).send({
                                     message: "User details updated",
                                     new_token,

@@ -1,20 +1,29 @@
 const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
-const http = require("http");
 const cookie_parser = require("cookie-parser");
 const express_rate_limit = require("express-rate-limit");
+const { ExpressPeerServer } = require("peer");
 
 const auth = require("./Utils/auth");
-const socket = require("./Utils/socket");
+const socket = require("./Configs/socket");
 const {
     onUserJoined,
     onJoinWithUsers,
     onMessageRecieved,
     deleteMessage,
     onDeleteRoom,
+    onRoomRequest,
 } = require("./Utils/eventHandlers");
-const { fetchRoomMessages } = require("./Utils/helpers");
+const {
+    fetchRoomMessages,
+    removeActiveUser,
+    getUserDataFromJWT,
+} = require("./Utils/helpers");
+
+dotenv.config();
+
+const PORT = process.env.PORT;
 
 const app = express();
 app.use(function (req, res, next) {
@@ -36,18 +45,38 @@ const limiter = express_rate_limit({
     windowMs: 1000 * 60,
     message: { error: "Too many attempts, please try again later." },
 });
-const server = http.createServer(app);
+
+const server = app.listen(PORT, () => {
+    console.log("Server running at: " + PORT + " " + new Date());
+});
+
 const io = socket(server);
+const peerServer = ExpressPeerServer(server, { port: 443 });
+
 app.use(limiter);
 app.use(express.json());
+app.use((req, res, next) => {
+    res.locals.io = io;
+    next();
+});
 app.use(cookie_parser(process.env.SECRET_KEY));
+app.use("/peerjs", peerServer);
 
-dotenv.config();
+peerServer.on("connection", (client) => {
+    console.log("peer server connected to client", client.getId());
+});
 
-const PORT = process.env.PORT;
+peerServer.on("error", (e) => {
+    console.log("peer error", e.message);
+});
+
+peerServer.on("disconnect", (client) => {
+    console.log("peer disconnected", client.getId());
+});
 
 io.on("connection", (socket) => {
-    const token = socket.handshake.auth.token;
+    const { token } = socket.handshake.auth;
+    const user_details = getUserDataFromJWT(token);
     console.log("new web socket connection");
 
     // socket.on("ping", (a) => {
@@ -57,12 +86,20 @@ io.on("connection", (socket) => {
     //     }, 1000);
     // });
 
+    // common handlers
     socket.on("user_joined", () => {
-        onUserJoined(token, socket);
+        onUserJoined(user_details, socket);
     });
-    socket.on("join_with_user", ({ user_id }) => {
-        onJoinWithUsers(user_id, token, socket, io);
+
+    // message/room handlers
+    socket.on("join_with_user", ({ user_id, groupName }) => {
+        onJoinWithUsers(user_id, user_details, groupName, socket, io);
     });
+
+    socket.on("room_request", () => {
+        onRoomRequest(user_details, socket);
+    });
+
     socket.on("room_messages_request", ({ room_id }, callback) => {
         fetchRoomMessages(room_id)
             .then(({ messages }) => {
@@ -73,10 +110,13 @@ io.on("connection", (socket) => {
                 callback({ error: e });
             });
     });
+
     socket.on("room_message_send", ({ message }, callback) => {
         callback();
         onMessageRecieved(message, socket, io);
+        // sendMessagesToInactive();
     });
+
     socket.on("delete_message", ({ room_id, message_id }, callback) => {
         deleteMessage(room_id, message_id)
             .then(({ messages }) => {
@@ -85,25 +125,52 @@ io.on("connection", (socket) => {
             })
             .catch((e) => callback({ error: e }));
     });
+
     socket.on("delete_room", ({ room_id }, callback) => {
         console.log("delete room", room_id);
-        onDeleteRoom(room_id, token, socket, callback)
+        onDeleteRoom(room_id, user_details, socket, callback)
             .then(({ message }) => {
                 console.log(message);
                 socket.leave(room_id);
+                io.emit("refresh_all", { changed_by: user_details.user_id });
             })
             .catch((e) => callback({ message: e }));
     });
+
+    // call handlers
+    socket.on("start_call", ({ room_id, my_peer_id }) => {
+        console.log("start-call", room_id, my_peer_id);
+        socket.broadcast.to(room_id).emit("call_initiated", {
+            initiators_details: {
+                peer_id: my_peer_id,
+                room_id,
+                socket_id: socket.id,
+            },
+        });
+    });
+
+    socket.on(
+        "join_call_request",
+        ({ peer_id, host_socket_id, room_id, localStreamId }) => {
+            io.to(room_id).emit("user_call_join_request", {
+                peer_id,
+                room_id,
+                stream_id: localStreamId,
+                host_socket_id,
+            });
+        }
+    );
+
+    // socket.on("disconnect", () => {
+    //     console.log("user disconnected");
+    //     const data = getUserDataFromJWT(token);
+    // });
 });
 
 app.use(auth);
 
 app.all("*", (req, res) => {
     res.send("Nothing");
-});
-
-server.listen(PORT, () => {
-    console.log("Server running at: " + PORT + " " + new Date());
 });
 
 /*

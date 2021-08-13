@@ -1,5 +1,6 @@
 const jwt = require("jsonwebtoken");
-const mysqlInstance = require("./db");
+const adminSdk = require("../Configs/firebase");
+const mysqlInstance = require("../Configs/db");
 const { v4: uuidv4 } = require("uuid");
 
 const getUserDataFromJWT = (token) => {
@@ -75,23 +76,24 @@ const fetchUserFromUserID = (user_id, requiredFields) => {
 
 const updateToken = (token, user_id) => {
     return new Promise((resolve, reject) => {
-        mysqlInstance.query(
-            `update users_table set jwt_token="${token}" where user_id="${user_id}"`,
-            (error1, response1) => {
-                if (error1) {
-                    console.log("update user error", error1);
-                    reject({ error: error1.message });
-                    return;
-                }
-                console.log("after logged in", response1.affectedRows);
-                resolve({ response: response1 });
+        const query = `update users_table set jwt_token="${token}" ${
+            token === "" ? `, fcm_token=""` : ""
+        } where user_id="${user_id}"`;
+        console.log("update token query", query);
+        mysqlInstance.query(query, (error1, response1) => {
+            if (error1) {
+                console.log("update user error", error1);
+                reject({ error: error1.message });
                 return;
             }
-        );
+            console.log("after logged in", response1.affectedRows);
+            resolve({ response: response1 });
+            return;
+        });
     });
 };
 
-const verifyToken = (token) => {
+const verifyToken = (token, fcm_token) => {
     return new Promise((resolve, reject) => {
         const data = getUserDataFromJWT(token);
         if (data) {
@@ -110,6 +112,27 @@ const verifyToken = (token) => {
                         return;
                     }
                     console.log("after verifying token", response1[0]);
+                    if (response1[0].fcm_token !== fcm_token) {
+                        mysqlInstance.query(
+                            `update users_table set fcm_token="${fcm_token}" where user_id="${data.user_id}"`,
+                            (error2, response2) => {
+                                if (error2) {
+                                    console.log(
+                                        "update user from db",
+                                        error2.message
+                                    );
+                                    reject({ error: error2.message });
+                                    return;
+                                }
+                                console.log(
+                                    "after updating users fcm",
+                                    response2.affectedRows
+                                );
+                                resolve({ user: data });
+                                return;
+                            }
+                        );
+                    }
                     resolve({ user: data });
                     return;
                 }
@@ -124,22 +147,21 @@ const verifyToken = (token) => {
 const fetchRoomMessages = (room_id) => {
     console.log(room_id);
     return new Promise((resolve, reject) => {
-        mysqlInstance.query(
-            `select * from messages_table where room_id="${room_id}"`,
-            (error1, response1) => {
-                if (error1) {
-                    console.log("fetch messages", error1.message);
-                    reject({ error: error1.message });
-                    return;
-                }
-                resolve({ messages: response1 });
+        const query = `select message_id, cast(aes_decrypt(message, "${room_id}_${process.env.SECRET_KEY}")as char) as message, type, send_at, room_id, from_user_id, from_username from messages_table where room_id="${room_id}"`;
+        console.log(query);
+        mysqlInstance.query(query, (error1, response1) => {
+            if (error1) {
+                console.log("fetch messages", error1.message);
+                reject({ error: error1.message });
                 return;
             }
-        );
+            resolve({ messages: response1 });
+            return;
+        });
     });
 };
 
-const createAndJoinRoom = (my_user_id, other_user_id, type) => {
+const createAndJoinRoom = (my_user_id, other_user_id, type, groupName) => {
     console.log("type", type);
     return new Promise((resolve, reject) => {
         const room_id = uuidv4();
@@ -152,10 +174,11 @@ const createAndJoinRoom = (my_user_id, other_user_id, type) => {
                     return;
                 }
                 if (type === "string") {
+                    console.log("inside type string", type);
                     mysqlInstance.query(
                         `insert into users_rooms_table values 
-            ("${room_id}", "${my_user_id}", "duet"),
-            ("${room_id}", "${other_user_id}", "duet")`,
+            ("${room_id}", "${my_user_id}", "duet", ""),
+            ("${room_id}", "${other_user_id}", "duet", "")`,
                         (error2, response2) => {
                             fetchUserFromUserID(other_user_id, "username").then(
                                 ({ response }) => {
@@ -173,9 +196,9 @@ const createAndJoinRoom = (my_user_id, other_user_id, type) => {
                     console.log("type object", other_user_id);
                     mysqlInstance.query(
                         `insert into users_rooms_table value
-                        ("${room_id}", "${my_user_id}", "group"),
+                        ("${room_id}", "${my_user_id}", "group", "${groupName}"),
                         ${other_user_id.map((id) => {
-                            return `("${room_id}", "${id}", "group")`;
+                            return `("${room_id}", "${id}", "group", "${groupName}")`;
                         })}
                         `,
                         (error2, response2) => {
@@ -232,6 +255,7 @@ const fetchCommonRoomAndJoinedUsers = (my_user_id) => {
                 if (response1.length !== 0) {
                     const users = {};
                     const per_room = {};
+                    const room_names = {};
                     for (let i = 0; i < response1.length; i++) {
                         let room_id = response1[i].room_id;
                         let user_id = response1[i].user_id;
@@ -244,6 +268,7 @@ const fetchCommonRoomAndJoinedUsers = (my_user_id) => {
                         per_room[room_id].push({
                             user_id,
                         });
+                        room_names[room_id] = response1[i].room_name;
                     }
                     const user_ids = JSON.stringify(Object.keys(users))
                         .replace("[", "")
@@ -287,7 +312,7 @@ const fetchCommonRoomAndJoinedUsers = (my_user_id) => {
                                         room_id: key,
                                         type:
                                             value.length > 1 ? "group" : "duet",
-                                        name: "",
+                                        room_name: room_names[key],
                                         users: value,
                                     });
                                 }
@@ -305,6 +330,7 @@ const fetchCommonRoomAndJoinedUsers = (my_user_id) => {
         );
     });
 };
+
 const deleteMessage = (room_id, message_id) => {
     return new Promise((resolve, reject) => {
         mysqlInstance.query(
@@ -324,6 +350,57 @@ const deleteMessage = (room_id, message_id) => {
     });
 };
 
+const fetchOtherRoomUsers = (room_id, my_user_id, requiredFields) => {
+    return new Promise((resolve, reject) => {
+        mysqlInstance.query(
+            `select ${requiredFields} from users_table where user_id in (select user_id from users_rooms_table where room_id = "${room_id}" and user_id != "${my_user_id}")`,
+            (error, response) => {
+                if (error) {
+                    console.log("fetch other room", error.message);
+                    reject({ error: error.message });
+                    return;
+                }
+                console.log("other room users", response);
+                resolve({ other_room_users: response });
+                return;
+            }
+        );
+    });
+};
+
+const sendMessageToAllOnUserSignup = (username, user_id) => {
+    mysqlInstance.query(
+        `select fcm_token from users_table where user_id != "${user_id || ""}"`,
+        (error, response) => {
+            if (error) {
+                console.log("error while fetching others fcm", error.message);
+                return;
+            }
+            const fcm_tokens = [];
+            response.forEach((item, index) => {
+                console.log(index, item.fcm_token);
+                if (item.fcm_token !== "") {
+                    fcm_tokens.push(item.fcm_token);
+                }
+            });
+            console.log("fcmTokens", fcm_tokens);
+            if (fcm_tokens.length > 0) {
+                adminSdk
+                    .messaging()
+                    .sendToDevice(fcm_tokens, {
+                        notification: {
+                            title: "New User has joined",
+                            body: username + " has joined. Say hi!",
+                        },
+                    })
+                    .then((a) => console.log(a))
+                    .catch((e) => console.log(e));
+            }
+            return;
+        }
+    );
+};
+
 module.exports = {
     getUserDataFromJWT,
     verifyToken,
@@ -335,4 +412,6 @@ module.exports = {
     fetchCommonRoomAndJoinedUsers,
     fetchAllUsers,
     deleteMessage,
+    fetchOtherRoomUsers,
+    sendMessageToAllOnUserSignup,
 };
