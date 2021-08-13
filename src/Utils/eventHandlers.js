@@ -22,18 +22,17 @@ const onUserJoined = (data, socket) => {
             console.log(socket.rooms);
             socket.broadcast.to(room_ids).emit("a_user_joined", { user: data });
             socket.emit("room_people_data", { response });
-            fetchAllUsers(data.user_id)
-                .then(({ response }) => {
-                    console.log(response);
-                    socket.emit("all_users", { users: response });
-                })
-                .catch((e) => socket.emit("fetch_error", { error: e }));
-            return;
         })
         .catch((e) => {
             console.log("error", e);
             socket.emit("fetch_error", { error: e });
         });
+    fetchAllUsers(data.user_id)
+        .then(({ response }) => {
+            console.log(response);
+            socket.emit("all_users", { users: response });
+        })
+        .catch((e) => socket.emit("fetch_error", { error: e }));
 };
 
 const onJoinWithUsers = (user_id, data, groupName, socket, io) => {
@@ -57,7 +56,6 @@ const onJoinWithUsers = (user_id, data, groupName, socket, io) => {
                         });
                     }
                 );
-                // io.emit("refresh_all", { changed_by: user_id });
                 return;
             })
             .catch((e) => {
@@ -94,9 +92,6 @@ const onJoinWithUsers = (user_id, data, groupName, socket, io) => {
                                     });
                                 }
                             );
-                            // io.emit("refresh_all", {
-                            //     changed_by: data.user_id,
-                            // });
                             return;
                         })
                         .catch((e) => {
@@ -146,72 +141,33 @@ const onMessageRecieved = (message, socket, io) => {
             io.to(message.room_id).emit("new_message", {
                 message,
             });
-            // /*
-            fetchRoomMessages(message.room_id)
-                .then(({ messages }) => {
-                    if (messages.length === 1) {
-                        fetchOtherRoomUsers(
-                            message.room_id,
-                            message.from_user_id,
-                            "fcm_token"
-                        ).then(({ other_room_users }) => {
-                            console.log("other room users", other_room_users);
-                            io.emit("refresh_all", {
-                                changed_by: message.from_user_id,
-                            });
-                            const fcm_tokens = [];
-                            other_room_users.forEach(({ fcm_token }) => {
-                                if (fcm_token !== "") {
-                                    fcm_tokens.push(fcm_token);
-                                }
-                            });
-                            if (fcm_tokens.length > 0) {
-                                adminSdk.messaging().sendToDevice(fcm_tokens, {
-                                    notification: {
-                                        title:
-                                            "New Message from " +
-                                            message.from_username,
-                                        body: message.message,
-                                    },
-                                });
-                            }
-                            // send message to these users through fcm_tokens
-                            // adminSdk.messaging().sendToDevice([{}])
-                        });
-                    } else {
-                        fetchOtherRoomUsers(
-                            message.room_id,
-                            message.from_user_id,
-                            "fcm_token"
-                        )
-                            .then(({ other_room_users }) => {
-                                console.log(
-                                    "other room users",
-                                    other_room_users
-                                );
-                                const fcm_tokens = [];
-                                other_room_users.forEach(({ fcm_token }) => {
-                                    if (fcm_token !== "") {
-                                        fcm_tokens.push(fcm_token);
-                                    }
-                                });
-                                // send message to these users through fcm_tokens adminSdk
+            fetchOtherRoomUsers(
+                message.room_id,
+                message.from_user_id,
+                "fcm_token"
+            )
+                .then(({ other_room_users }) => {
+                    io.emit("refresh_all", {
+                        changed_by: message.from_user_id,
+                        type: "chat_update",
+                    });
+                    console.log("other room users", other_room_users);
+                    const fcm_tokens = [];
+                    other_room_users.forEach(({ fcm_token }) => {
+                        if (fcm_token !== "") {
+                            fcm_tokens.push(fcm_token);
+                        }
+                    });
 
-                                adminSdk.messaging().sendToDevice(fcm_tokens, {
-                                    notification: {
-                                        title:
-                                            "New Message from " +
-                                            message.from_username,
-                                        body: "-> " + message.message,
-                                    },
-                                });
-                            })
-                            .then((a) => console.log(a))
-                            .catch((e) => console.log(e));
-                    }
+                    adminSdk.messaging().sendToDevice(fcm_tokens, {
+                        notification: {
+                            title: "New Message from " + message.from_username,
+                            body: message.message,
+                        },
+                    });
                 })
-                .catch((e) => console.log("error", e));
-            // */
+                .then((a) => console.log(a))
+                .catch((e) => console.log(e));
         }
     );
 };

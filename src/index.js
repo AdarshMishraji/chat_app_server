@@ -121,6 +121,10 @@ io.on("connection", (socket) => {
         deleteMessage(room_id, message_id)
             .then(({ messages }) => {
                 socket.broadcast.to(room_id).emit("room_chats", { messages });
+                io.emit("refresh_all", {
+                    changed_by: room_id,
+                    type: "chat_update",
+                });
                 callback({ messages });
             })
             .catch((e) => callback({ error: e }));
@@ -161,6 +165,11 @@ io.on("connection", (socket) => {
         }
     );
 
+    socket.on("typing_state", ({ state, user_id, room_id }) => {
+        socket.broadcast
+            .to(room_id)
+            .emit("users_typing_state", { state, user_id, room_id });
+    });
     // socket.on("disconnect", () => {
     //     console.log("user disconnected");
     //     const data = getUserDataFromJWT(token);

@@ -260,12 +260,15 @@ const fetchCommonRoomAndJoinedUsers = (my_user_id) => {
                         let room_id = response1[i].room_id;
                         let user_id = response1[i].user_id;
                         if (per_room[room_id] === undefined) {
-                            per_room[room_id] = [];
+                            per_room[room_id] = {
+                                room_type: response1[i].room_type,
+                                users: [],
+                            };
                         }
                         if (users[user_id] === undefined) {
                             users[user_id] = {};
                         }
-                        per_room[room_id].push({
+                        per_room[room_id].users.push({
                             user_id,
                         });
                         room_names[room_id] = response1[i].room_name;
@@ -274,58 +277,98 @@ const fetchCommonRoomAndJoinedUsers = (my_user_id) => {
                         .replace("[", "")
                         .replace("]", "");
 
-                    mysqlInstance.query(
-                        `select ut.user_id, ut.username, ut.name from users_table ut where ut.user_id in (${user_ids}) order by user_id`,
-                        (error2, response2) => {
-                            if (error2) {
-                                console.log("fetch common2", error1.message);
-                                reject({ error: error2.message });
-                                return;
-                            }
-                            if (response2.length > 0) {
-                                const new_res = [];
-                                //             const per_room = {};
-                                for (let i = 0; i < response2.length; i++) {
-                                    users[response2[i].user_id] = {
-                                        username: response2[i].username,
-                                        name: response2[i].name,
-                                    };
-                                }
-                                for (const [key, value] of Object.entries(
-                                    per_room
-                                )) {
-                                    per_room[key].forEach((ele, index) => {
-                                        let data = {
-                                            user_id: ele.user_id,
-                                            username:
-                                                users[ele.user_id].username,
-                                            name: users[ele.user_id].name,
-                                        };
-                                        per_room[key][index] = data;
-                                    });
-                                }
-                                console.log("per_room", per_room);
-                                for (const [key, value] of Object.entries(
-                                    per_room
-                                )) {
-                                    new_res.push({
-                                        room_id: key,
-                                        type:
-                                            value.length > 1 ? "group" : "duet",
-                                        room_name: room_names[key],
-                                        users: value,
-                                    });
-                                }
-                                console.log("new res", new_res);
-                                resolve({ response: new_res });
-                            } else {
-                                resolve({ response: response1 }); // empty array.
-                            }
+                    const room_ids = JSON.stringify(Object.keys(room_names))
+                        .replace("[", "")
+                        .replace("]", "");
+
+                    let new_res = [];
+
+                    const promises = [
+                        userWithUserdIDs(user_ids, per_room, users),
+                        fetchLastMessage(room_ids),
+                    ];
+
+                    Promise.all(promises).then((res) => {
+                        console.log("promise all", res);
+                        let per_room_data = res[0].response;
+                        let room_last_msg = res[1].room_last_msg;
+
+                        for (const [key, value] of Object.entries(
+                            per_room_data
+                        )) {
+                            new_res.push({
+                                room_id: key,
+                                type: value.room_type,
+                                room_name: room_names[key],
+                                users: value.users,
+                                last_msg: room_last_msg[key],
+                            });
                         }
-                    );
+                        resolve({ response: new_res });
+                    });
                 } else {
                     resolve({ response: response1 }); // empty array.
                 }
+            }
+        );
+    });
+};
+
+const userWithUserdIDs = (user_ids, per_room, users) => {
+    return new Promise((resolve, reject) => {
+        mysqlInstance.query(
+            `select ut.user_id, ut.username, ut.name from users_table ut where ut.user_id in (${user_ids}) order by user_id`,
+            (error, response) => {
+                if (error) {
+                    console.log("fetch common2", error.message);
+                    reject({ error: error.message });
+                    return;
+                }
+                if (response.length > 0) {
+                    // const new_res = [];
+                    //             const per_room = {};
+                    for (let i = 0; i < response.length; i++) {
+                        users[response[i].user_id] = {
+                            username: response[i].username,
+                            name: response[i].name,
+                        };
+                    }
+                    for (const [key, value] of Object.entries(per_room)) {
+                        per_room[key].users.forEach((ele, index) => {
+                            let data = {
+                                user_id: ele.user_id,
+                                username: users[ele.user_id].username,
+                                name: users[ele.user_id].name,
+                            };
+                            per_room[key].users[index] = data;
+                        });
+                    }
+                    console.log("per_room", per_room);
+                    resolve({ response: per_room });
+                } else {
+                    resolve({ response: response }); // empty array.
+                }
+            }
+        );
+    });
+};
+
+const fetchLastMessage = (room_ids) => {
+    return new Promise((resolve, reject) => {
+        mysqlInstance.query(
+            `select message_id, cast(aes_decrypt(message, concat( room_id , "_${process.env.SECRET_KEY}"))as char) as message, type, send_at, room_id, from_user_id, from_username 
+                from messages_table where room_id in (${room_ids}) and message_id in (select max(message_id) from messages_table mt where true group by room_id);`,
+            (error, response) => {
+                if (error) {
+                    console.log("fetch last msg", error.message);
+                    reject({ error: error.message });
+                    return;
+                }
+                const room_last_msg = {};
+                response.forEach((ele) => {
+                    room_last_msg[ele.room_id] = { ...ele };
+                });
+                resolve({ room_last_msg });
             }
         );
     });
