@@ -177,21 +177,21 @@ const createAndJoinRoom = (my_user_id, other_user_id, type, groupName) => {
                     console.log("inside type string", type);
                     mysqlInstance.query(
                         `insert into users_rooms_table values 
-            ("${room_id}", "${my_user_id}", "duet", ""),
-            ("${room_id}", "${other_user_id}", "duet", "")`,
+            ("${room_id}", "${my_user_id}", "duet", "")
+            ${
+                other_user_id
+                    ? `,("${room_id}", "${other_user_id}", "duet", "")}`
+                    : ""
+            }`,
                         (error2, response2) => {
-                            fetchUserFromUserID(other_user_id, "username").then(
-                                ({ response }) => {
-                                    resolve({
-                                        message: "connected to room",
-                                        room_id,
-                                        user: response,
-                                    });
-                                }
-                            );
+                            resolve({
+                                message: "connected to room",
+                                room_id,
+                                e,
+                            });
+                            return;
                         }
                     );
-                    return;
                 } else {
                     console.log("type object", other_user_id);
                     mysqlInstance.query(
@@ -206,16 +206,11 @@ const createAndJoinRoom = (my_user_id, other_user_id, type, groupName) => {
                                 "after insert room",
                                 response2.affectedRows
                             );
-                            fetchUserFromUserID(other_user_id, "username").then(
-                                ({ response }) => {
-                                    resolve({
-                                        message: "connected to room",
-                                        room_id,
-                                        user: response,
-                                    });
-                                    return;
-                                }
-                            );
+                            resolve({
+                                message: "connected to room",
+                                room_id,
+                            });
+                            return;
                         }
                     );
                 }
@@ -444,6 +439,80 @@ const sendMessageToAllOnUserSignup = (username, user_id) => {
     );
 };
 
+const sendMessage = (message, socket, io) => {
+    return new Promise((resolve, reject) => {
+        mysqlInstance.query(
+            `
+        insert into messages_table
+            (message, type, send_at, room_id, from_user_id, from_username)
+        values (aes_encrypt("${message.message}", "${message.room_id}_${process.env.SECRET_KEY}"), "${message.type}", "${message.send_at}", "${message.room_id}", "${message.from_user_id}", "${message.from_username}")`,
+            (error1, response1) => {
+                if (error1) {
+                    console.log("message", error1.message);
+                    socket.emit("message_error", { error: error1.message });
+                    reject({ error: error1.message });
+                    return;
+                }
+                console.log("message added", response1.affectedRows);
+                io.to(message.room_id).emit("new_message", {
+                    message,
+                });
+                resolve();
+                console.log("after resolve");
+                fetchOtherRoomUsers(
+                    message.room_id,
+                    message.from_user_id,
+                    "fcm_token"
+                )
+                    .then(({ other_room_users }) => {
+                        io.emit("refresh_all", {
+                            changed_by: message.from_user_id,
+                            type: "chat_update",
+                        });
+                        console.log("other room users", other_room_users);
+                        const fcm_tokens = [];
+                        other_room_users.forEach(({ fcm_token }) => {
+                            if (fcm_token !== "") {
+                                fcm_tokens.push(fcm_token);
+                            }
+                        });
+
+                        adminSdk.messaging().sendToDevice(fcm_tokens, {
+                            notification: {
+                                title:
+                                    "New Message from " + message.from_username,
+                                body: message.message,
+                            },
+                        });
+                    })
+                    .then((a) => console.log(a))
+                    .catch((e) => console.log(e));
+            }
+        );
+    });
+};
+
+const insertUserIntoRoom = (room_id, other_user_id, room_type, io) => {
+    return new Promise((resolve, reject) => {
+        mysqlInstance.query(
+            `insert into users_rooms_table value ("${room_id}", "${other_user_id}", "${room_type}", "")`,
+            (error, response) => {
+                if (error) {
+                    console.log("error while insert user", error.message);
+                    reject({ error: error.message });
+                    return;
+                }
+                io.emit("refresh_all", {
+                    type: "chat_update",
+                    changed_by: null,
+                });
+                resolve({ response: response.affectedRows });
+                return;
+            }
+        );
+    });
+};
+
 module.exports = {
     getUserDataFromJWT,
     verifyToken,
@@ -457,4 +526,6 @@ module.exports = {
     deleteMessage,
     fetchOtherRoomUsers,
     sendMessageToAllOnUserSignup,
+    sendMessage,
+    insertUserIntoRoom,
 };

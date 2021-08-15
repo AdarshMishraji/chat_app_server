@@ -9,6 +9,8 @@ const {
     fetchAllUsers,
     deleteMessage,
     fetchOtherRoomUsers,
+    sendMessage,
+    insertUserIntoRoom,
 } = require("./helpers");
 
 const onUserJoined = (data, socket) => {
@@ -73,25 +75,17 @@ const onJoinWithUsers = (user_id, data, groupName, socket, io) => {
                 }
                 console.log("response", response1, response1.length);
                 if (response1.length === 0) {
-                    createAndJoinRoom(data.user_id, user_id, "string")
+                    createAndJoinRoom(data.user_id, null, "string")
                         .then(({ room_id }) => {
                             console.log(room_id);
                             socket.join(room_id);
                             console.log(socket.rooms);
-                            io.to(room_id).emit("room_created_and_joined", {
+                            socket.emit("room_created_and_joined", {
                                 message:
                                     "a room is created and you have joined",
                                 room_id,
                                 type: "duet",
                             });
-                            fetchCommonRoomAndJoinedUsers(data.user_id).then(
-                                ({ response }) => {
-                                    socket.emit("room_people_data", {
-                                        response,
-                                        type: "duet",
-                                    });
-                                }
-                            );
                             return;
                         })
                         .catch((e) => {
@@ -126,50 +120,22 @@ const onJoinWithUsers = (user_id, data, groupName, socket, io) => {
 
 const onMessageRecieved = (message, socket, io) => {
     console.log("message", message);
-    mysqlInstance.query(
-        `
-        insert into messages_table
-            (message, type, send_at, room_id, from_user_id, from_username)
-        values (aes_encrypt("${message.message}", "${message.room_id}_${process.env.SECRET_KEY}"), "${message.type}", "${message.send_at}", "${message.room_id}", "${message.from_user_id}", "${message.from_username}")`,
-        (error1, response1) => {
-            if (error1) {
-                console.log("message", error1.message);
-                socket.emit("message_error", { error: error1.message });
-                return;
-            }
-            console.log("message added", response1.affectedRows);
-            io.to(message.room_id).emit("new_message", {
-                message,
-            });
-            fetchOtherRoomUsers(
-                message.room_id,
-                message.from_user_id,
-                "fcm_token"
-            )
-                .then(({ other_room_users }) => {
-                    io.emit("refresh_all", {
-                        changed_by: message.from_user_id,
-                        type: "chat_update",
-                    });
-                    console.log("other room users", other_room_users);
-                    const fcm_tokens = [];
-                    other_room_users.forEach(({ fcm_token }) => {
-                        if (fcm_token !== "") {
-                            fcm_tokens.push(fcm_token);
-                        }
-                    });
-
-                    adminSdk.messaging().sendToDevice(fcm_tokens, {
-                        notification: {
-                            title: "New Message from " + message.from_username,
-                            body: message.message,
-                        },
-                    });
-                })
-                .then((a) => console.log(a))
-                .catch((e) => console.log(e));
-        }
-    );
+    if (
+        message.room_type === "duet" &&
+        message.action === "insert_other_user_into_duet_room"
+    ) {
+        insertUserIntoRoom(
+            message.room_id,
+            message.other_user_id,
+            message.room_type,
+            io
+        )
+            .then(() => console.log("user inserted"))
+            .catch((e) => console.log(e));
+    }
+    sendMessage(message, socket, io)
+        .then(() => console.log("message sent"))
+        .catch((e) => console.log("message error", e));
 };
 
 const onDeleteRoom = (room_id, user_details, socket, callback) => {
