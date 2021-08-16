@@ -33,11 +33,6 @@ const fetchUserFromUsername = (username, requiredFields) => {
 
 const fetchUserFromUserID = (user_id, requiredFields) => {
     return new Promise((resolve, reject) => {
-        console.log(
-            `select ${
-                requiredFields === "all" ? "*" : requiredFields
-            } from users_table where user_id="${user_id}"`
-        );
         if (typeof user_id === "string") {
             mysqlInstance.query(
                 `select ${
@@ -49,8 +44,14 @@ const fetchUserFromUserID = (user_id, requiredFields) => {
                         reject({ error: error1.message });
                         return;
                     }
-                    resolve({ response: response1 });
-                    return;
+                    if (response1.length > 0) {
+                        console.log("fetch user res", response1[0]);
+                        resolve({ response: response1[0] });
+                        return;
+                    } else {
+                        reject({ error: "no user found" });
+                        return;
+                    }
                 }
             );
         } else {
@@ -80,15 +81,28 @@ const updateToken = (token, user_id) => {
             token === "" ? `, fcm_token=""` : ""
         } where user_id="${user_id}"`;
         console.log("update token query", query);
-        mysqlInstance.query(query, (error1, response1) => {
-            if (error1) {
-                console.log("update user error", error1);
-                reject({ error: error1.message });
+        mysqlInstance.beginTransaction((err) => {
+            if (err) reject({ error: err.message });
+            mysqlInstance.query(query, (error1, response1) => {
+                if (error1) {
+                    console.log("update user error", error1);
+                    mysqlInstance.rollback(() => {
+                        reject({ error: error1.message });
+                    });
+                    return;
+                }
+                console.log("after updating token", response1.affectedRows);
+                mysqlInstance.commit((err) => {
+                    if (err) {
+                        console.log("commit error", err.message);
+                        reject({ error: err.message });
+                        return;
+                    }
+                    console.log("commited");
+                    resolve({ response: response1 });
+                });
                 return;
-            }
-            console.log("after logged in", response1.affectedRows);
-            resolve({ response: response1 });
-            return;
+            });
         });
     });
 };
@@ -113,25 +127,44 @@ const verifyToken = (token, fcm_token) => {
                     }
                     console.log("after verifying token", response1[0]);
                     if (response1[0].fcm_token !== fcm_token) {
-                        mysqlInstance.query(
-                            `update users_table set fcm_token="${fcm_token}" where user_id="${data.user_id}"`,
-                            (error2, response2) => {
-                                if (error2) {
-                                    console.log(
-                                        "update user from db",
-                                        error2.message
-                                    );
-                                    reject({ error: error2.message });
-                                    return;
-                                }
-                                console.log(
-                                    "after updating users fcm",
-                                    response2.affectedRows
-                                );
-                                resolve({ user: data });
+                        mysqlInstance.beginTransaction((err) => {
+                            if (err) {
+                                reject({ error: err.message });
                                 return;
                             }
-                        );
+                            mysqlInstance.query(
+                                `update users_table set fcm_token="${fcm_token}" where user_id="${data.user_id}"`,
+                                (error2, response2) => {
+                                    if (error2) {
+                                        console.log(
+                                            "update user from db",
+                                            error2.message
+                                        );
+                                        mysqlInstance.rollback(() => {
+                                            reject({ error: error2.message });
+                                        });
+                                        return;
+                                    }
+                                    mysqlInstance.commit((err) => {
+                                        if (err) {
+                                            console.log(
+                                                "commit error",
+                                                err.message
+                                            );
+                                            reject({ error: err.message });
+                                            return;
+                                        }
+                                        console.log("commited");
+                                        console.log(
+                                            "after updating users fcm",
+                                            response2.affectedRows
+                                        );
+                                        resolve({ user: data });
+                                    });
+                                    return;
+                                }
+                            );
+                        });
                     }
                     resolve({ user: data });
                     return;
@@ -147,7 +180,7 @@ const verifyToken = (token, fcm_token) => {
 const fetchRoomMessages = (room_id) => {
     console.log(room_id);
     return new Promise((resolve, reject) => {
-        const query = `select message_id, cast(aes_decrypt(message, "${room_id}_${process.env.SECRET_KEY}")as char) as message, type, send_at, room_id, from_user_id, from_username from messages_table where room_id="${room_id}"`;
+        const query = `select message_id, cast(aes_decrypt(message, "${room_id}_${process.env.SECRET_KEY}")as char) as message, type, send_at, room_id, from_user_id, from_username, reply_to_message_id, cast(aes_decrypt(reply_to_message_text, "${room_id}_${process.env.SECRET_KEY}")as char) as reply_to_message_text from messages_table where room_id="${room_id}" order by send_at`;
         console.log(query);
         mysqlInstance.query(query, (error1, response1) => {
             if (error1) {
@@ -165,67 +198,118 @@ const createAndJoinRoom = (my_user_id, other_user_id, type, groupName) => {
     console.log("type", type);
     return new Promise((resolve, reject) => {
         const room_id = uuidv4();
-        mysqlInstance.query(
-            `insert into rooms_table values ("${room_id}")`,
-            (error1, response1) => {
-                if (error1) {
-                    console.log("create room", error1.message);
-                    reject({ error: error1.message });
-                    return;
-                }
-                if (type === "string") {
-                    console.log("inside type string", type);
-                    mysqlInstance.query(
-                        `insert into users_rooms_table values 
-            ("${room_id}", "${my_user_id}", "duet", "")
-            ${
-                other_user_id
-                    ? `,("${room_id}", "${other_user_id}", "duet", "")}`
-                    : ""
-            }`,
-                        (error2, response2) => {
-                            resolve({
-                                message: "connected to room",
-                                room_id,
-                                e,
-                            });
-                            return;
-                        }
-                    );
-                } else {
-                    console.log("type object", other_user_id);
-                    mysqlInstance.query(
-                        `insert into users_rooms_table value
-                        ("${room_id}", "${my_user_id}", "group", "${groupName}"),
-                        ${other_user_id.map((id) => {
-                            return `("${room_id}", "${id}", "group", "${groupName}")`;
-                        })}
-                        `,
-                        (error2, response2) => {
+        mysqlInstance.beginTransaction((err) => {
+            if (err) {
+                reject({ error: err.message });
+            }
+            mysqlInstance.query(
+                `insert into rooms_table values ("${room_id}")`,
+                (error1, response1) => {
+                    if (error1) {
+                        console.log("create room", error1.message);
+                        mysqlInstance.rollback(() => {
+                            reject({ error: error1.message });
+                        });
+                        return;
+                    }
+                    if (type === "string") {
+                        console.log("inside type string", type);
+                        mysqlInstance.query(
+                            `insert into users_rooms_table values 
+                    ("${room_id}", "${my_user_id}", "normal", "duet", "")
+                    ${
+                        other_user_id
+                            ? `,("${room_id}", "${other_user_id}", "normal", "duet", "")}`
+                            : ""
+                    }`,
+                            (error2, response2) => {
+                                if (error2) {
+                                    console.log(
+                                        "insert into room",
+                                        error2.message
+                                    );
+                                    mysqlInstance.rollback(() => {
+                                        reject({
+                                            error: error2.message,
+                                        });
+                                        return;
+                                    });
+                                }
+                                console.log(
+                                    "after insert room",
+                                    response2.affectedRows
+                                );
+                                mysqlInstance.commit((err) => {
+                                    if (err) {
+                                        console.log(
+                                            "commit error",
+                                            err.message
+                                        );
+                                        reject({ error: err.message });
+                                        returnl;
+                                    }
+                                    console.log("commited");
+                                    resolve({
+                                        message: "connected to room",
+                                        room_id,
+                                    });
+                                });
+                                return;
+                            }
+                        );
+                    } else {
+                        console.log("type object", other_user_id);
+                        const query = `insert into users_rooms_table value
+                                ("${room_id}", "${my_user_id}", "admin", "group", "${groupName}"),
+                                ${other_user_id.map((id) => {
+                                    return `("${room_id}", "${id}", "normal", "group", "${groupName}")`;
+                                })}
+                                `;
+                        console.log("query", query);
+                        mysqlInstance.query(query, (error2, response2) => {
+                            if (error2) {
+                                console.log("insert into room", error2.message);
+                                mysqlInstance.rollback(() => {
+                                    reject({
+                                        error: error2.message,
+                                    });
+                                });
+                                return;
+                            }
                             console.log(
                                 "after insert room",
                                 response2.affectedRows
                             );
-                            resolve({
-                                message: "connected to room",
-                                room_id,
+                            mysqlInstance.commit((err) => {
+                                if (err) {
+                                    console.log("commit error", err.message);
+                                    reject({ error: err.message });
+                                    return;
+                                }
+                                console.log("commited");
+                                resolve({
+                                    message: "connected to room",
+                                    room_id,
+                                });
                             });
                             return;
-                        }
-                    );
+                        });
+                        // });
+                    }
                 }
-            }
-        );
+            );
+        });
+        // });
     });
 };
 
 const fetchAllUsers = (user_id) => {
     return new Promise((resolve, reject) => {
         mysqlInstance.query(
-            `select user_id, username, name from users_table where user_id != "${
+            `select user_id, username, name, active_status from users_table where user_id != "${
                 user_id || ""
             }"`,
-            (error, response, fields) => {
+            (error, response) => {
                 if (error) {
                     reject({ error: error.message });
                     return;
@@ -240,7 +324,7 @@ const fetchAllUsers = (user_id) => {
 const fetchCommonRoomAndJoinedUsers = (my_user_id) => {
     return new Promise((resolve, reject) => {
         mysqlInstance.query(
-            `select * from users_rooms_table where room_id in (select room_id from users_rooms_table where user_id = "${my_user_id}") and user_id !="${my_user_id}" order by user_id;`,
+            `select * from users_rooms_table where room_id in (select room_id from users_rooms_table where user_id = "${my_user_id}") order by user_id`,
             (error1, response1) => {
                 if (error1) {
                     console.log("fetch common", error1.message);
@@ -265,6 +349,7 @@ const fetchCommonRoomAndJoinedUsers = (my_user_id) => {
                         }
                         per_room[room_id].users.push({
                             user_id,
+                            role: response1[i].role,
                         });
                         room_names[room_id] = response1[i].room_name;
                     }
@@ -320,25 +405,23 @@ const userWithUserdIDs = (user_ids, per_room, users) => {
                     return;
                 }
                 if (response.length > 0) {
-                    // const new_res = [];
-                    //             const per_room = {};
                     for (let i = 0; i < response.length; i++) {
                         users[response[i].user_id] = {
                             username: response[i].username,
                             name: response[i].name,
                         };
                     }
+                    console.log("users", users);
                     for (const [key, value] of Object.entries(per_room)) {
                         per_room[key].users.forEach((ele, index) => {
                             let data = {
                                 user_id: ele.user_id,
-                                username: users[ele.user_id].username,
-                                name: users[ele.user_id].name,
+                                role: per_room[key].users[index].role,
+                                ...users[ele.user_id],
                             };
                             per_room[key].users[index] = data;
                         });
                     }
-                    console.log("per_room", per_room);
                     resolve({ response: per_room });
                 } else {
                     resolve({ response: response }); // empty array.
@@ -352,7 +435,7 @@ const fetchLastMessage = (room_ids) => {
     return new Promise((resolve, reject) => {
         mysqlInstance.query(
             `select message_id, cast(aes_decrypt(message, concat( room_id , "_${process.env.SECRET_KEY}"))as char) as message, type, send_at, room_id, from_user_id, from_username 
-                from messages_table where room_id in (${room_ids}) and message_id in (select max(message_id) from messages_table mt where true group by room_id);`,
+                from messages_table where room_id in (${room_ids}) and send_at in (select max(send_at) from messages_table mt where true group by room_id);`,
             (error, response) => {
                 if (error) {
                     console.log("fetch last msg", error.message);
@@ -371,20 +454,33 @@ const fetchLastMessage = (room_ids) => {
 
 const deleteMessage = (room_id, message_id) => {
     return new Promise((resolve, reject) => {
-        mysqlInstance.query(
-            `delete from messages_table where room_id="${room_id}" and message_id=${message_id}`,
-            (error, response) => {
-                if (error) {
-                    console.log("delete msg", error.message);
-                    reject({ error: error.message });
-                    return;
+        mysqlInstance.beginTransaction((err) => {
+            if (err) reject({ error: err.message });
+            mysqlInstance.query(
+                `delete from messages_table where room_id="${room_id}" and message_id="${message_id}"`,
+                (error, response) => {
+                    if (error) {
+                        console.log("delete msg", error.message);
+                        mysqlInstance.rollback(() => {
+                            reject({ error: error.message });
+                        });
+                        return;
+                    }
+                    console.log("delete message", response.affectedRows);
+                    mysqlInstance.commit((err) => {
+                        if (err) {
+                            console.log("commit error", err.message);
+                            reject({ error: err.message });
+                            return;
+                        }
+                        console.log("commited");
+                        fetchRoomMessages(room_id).then(({ messages }) => {
+                            resolve({ messages });
+                        });
+                    });
                 }
-                console.log("delete message", response.affectedRows);
-                fetchRoomMessages(room_id).then(({ messages }) => {
-                    resolve({ messages });
-                });
-            }
-        );
+            );
+        });
     });
 };
 
@@ -395,9 +491,16 @@ const fetchOtherRoomUsers = (room_id, my_user_id, requiredFields) => {
             (error, response) => {
                 if (error) {
                     console.log("fetch other room", error.message);
+                    mysqlInstance.rollback();
                     reject({ error: error.message });
                     return;
                 }
+                mysqlInstance.commit((err) => {
+                    if (err) {
+                        console.log("commit error", err.message);
+                    }
+                    console.log("commited");
+                });
                 console.log("other room users", response);
                 resolve({ other_room_users: response });
                 return;
@@ -441,72 +544,194 @@ const sendMessageToAllOnUserSignup = (username, user_id) => {
 
 const sendMessage = (message, socket, io) => {
     return new Promise((resolve, reject) => {
-        mysqlInstance.query(
-            `
-        insert into messages_table
-            (message, type, send_at, room_id, from_user_id, from_username)
-        values (aes_encrypt("${message.message}", "${message.room_id}_${process.env.SECRET_KEY}"), "${message.type}", "${message.send_at}", "${message.room_id}", "${message.from_user_id}", "${message.from_username}")`,
-            (error1, response1) => {
+        const message_id = uuidv4();
+        const query =
+            message.type === "reply_text"
+                ? `insert into messages_table
+            (message_id, message, type, send_at, room_id, from_user_id, from_username, reply_to_message_id, reply_to_message_text)
+        values ("${message_id}", aes_encrypt("${message.message}", "${message.room_id}_${process.env.SECRET_KEY}"), "${message.type}", "${message.send_at}", "${message.room_id}", "${message.from_user_id}", "${message.from_username}", "${message.reply_to_message_id}",  aes_encrypt("${message.reply_to_message_text}", "${message.room_id}_${process.env.SECRET_KEY}"))`
+                : `insert into messages_table
+            (message_id, message, type, send_at, room_id, from_user_id, from_username)
+        values ("${message_id}", aes_encrypt("${message.message}", "${message.room_id}_${process.env.SECRET_KEY}"), "${message.type}", "${message.send_at}", "${message.room_id}", "${message.from_user_id}", "${message.from_username}")`;
+        mysqlInstance.beginTransaction((err) => {
+            if (err) reject({ error: err.message });
+            mysqlInstance.query(query, (error1, response1) => {
                 if (error1) {
                     console.log("message", error1.message);
-                    socket.emit("message_error", { error: error1.message });
-                    reject({ error: error1.message });
+                    mysqlInstance.rollback(() => {
+                        socket.emit("message_error", { error: error1.message });
+                        reject({ error: error1.message });
+                    });
                     return;
                 }
-                console.log("message added", response1.affectedRows);
-                io.to(message.room_id).emit("new_message", {
-                    message,
+                mysqlInstance.commit((err) => {
+                    if (err) {
+                        console.log("commit error", err.message);
+                        reject({ error: err.message });
+                        returnl;
+                    }
+                    console.log("commited");
+                    console.log("message added", response1.affectedRows);
+                    io.to(message.room_id).emit("new_message", {
+                        message: {
+                            ...message,
+                            message_id,
+                        },
+                    });
+                    resolve();
+                    console.log("after resolve");
+                    fetchOtherRoomUsers(
+                        message.room_id,
+                        message.from_user_id,
+                        "fcm_token"
+                    )
+                        .then(({ other_room_users }) => {
+                            io.emit("refresh_all", {
+                                changed_by: message.from_user_id,
+                                type: "chat_update",
+                            });
+                            console.log("other room users", other_room_users);
+                            const fcm_tokens = [];
+                            other_room_users.forEach(({ fcm_token }) => {
+                                if (fcm_token !== "") {
+                                    fcm_tokens.push(fcm_token);
+                                }
+                            });
+                            let title =
+                                message.type === "reply_text"
+                                    ? message.from_username + " replied"
+                                    : "New Message from " +
+                                      message.from_username;
+                            if (fcm_tokens.length > 0)
+                                adminSdk.messaging().sendToDevice(fcm_tokens, {
+                                    notification: {
+                                        title,
+                                        body: message.message,
+                                    },
+                                });
+                        })
+                        .then((a) => console.log(a))
+                        .catch((e) => console.log(e));
                 });
-                resolve();
-                console.log("after resolve");
-                fetchOtherRoomUsers(
-                    message.room_id,
-                    message.from_user_id,
-                    "fcm_token"
-                )
-                    .then(({ other_room_users }) => {
-                        io.emit("refresh_all", {
-                            changed_by: message.from_user_id,
-                            type: "chat_update",
-                        });
-                        console.log("other room users", other_room_users);
-                        const fcm_tokens = [];
-                        other_room_users.forEach(({ fcm_token }) => {
-                            if (fcm_token !== "") {
-                                fcm_tokens.push(fcm_token);
-                            }
-                        });
-
-                        adminSdk.messaging().sendToDevice(fcm_tokens, {
-                            notification: {
-                                title:
-                                    "New Message from " + message.from_username,
-                                body: message.message,
-                            },
-                        });
-                    })
-                    .then((a) => console.log(a))
-                    .catch((e) => console.log(e));
-            }
-        );
+            });
+        });
     });
 };
 
-const insertUserIntoRoom = (room_id, other_user_id, room_type, io) => {
+const insertUserIntoRoom = (
+    room_id,
+    other_user_id,
+    role,
+    room_type,
+    room_name,
+    io
+) => {
+    return new Promise((resolve, reject) => {
+        mysqlInstance.beginTransaction((err) => {
+            if (err) reject({ error: err.message });
+            mysqlInstance.query(
+                `insert into users_rooms_table value ("${room_id}", "${other_user_id}", "${role}",  "${room_type}", "${room_name}")`,
+                (error, response) => {
+                    if (error) {
+                        console.log("error while insert user", error.message);
+                        mysqlInstance.rollback(() => {
+                            reject({ error: error.message });
+                        });
+                        return;
+                    }
+                    mysqlInstance.commit((err) => {
+                        if (err) {
+                            console.log("commit error", err.message);
+                            reject({ error: error.message });
+                            return;
+                        }
+                        console.log("commited");
+                        io.emit("refresh_all", {
+                            type: "chat_update",
+                            changed_by: null,
+                        });
+                        resolve({ response: response.affectedRows });
+                    });
+                    return;
+                }
+            );
+        });
+    });
+};
+
+const setActiveStatus = (user_id, status) => {
     return new Promise((resolve, reject) => {
         mysqlInstance.query(
-            `insert into users_rooms_table value ("${room_id}", "${other_user_id}", "${room_type}", "")`,
+            `update users_table set active_status = "${status}" where user_id="${user_id}"`,
             (error, response) => {
                 if (error) {
                     console.log("error while insert user", error.message);
                     reject({ error: error.message });
                     return;
                 }
-                io.emit("refresh_all", {
-                    type: "chat_update",
-                    changed_by: null,
-                });
                 resolve({ response: response.affectedRows });
+                return;
+            }
+        );
+    });
+};
+
+const addInvitation = (
+    invited_by_user_id,
+    invited_by_username,
+    invited_to_user_id,
+    invited_to_username,
+    group_room_id,
+    group_room_name
+) => {
+    return new Promise((resolve, reject) => {
+        const invitation_id = uuidV4();
+        mysqlInstance.query(
+            `insert into group_room_invites_table values ("${invitation_id}", "${invited_by_user_id}","${invited_by_username}", "${invited_to_user_id}", "${invited_to_username}", "${group_room_id}", "${group_room_name}")`,
+            (error1, response1) => {
+                if (error1) {
+                    console.log("insert invite", error1.message);
+                    reject({ error: error1.message });
+                    return;
+                }
+                console.log("invited", response1.affectedRows);
+                resolve({ message: "invited" });
+                return;
+            }
+        );
+    });
+};
+
+const deleteInvitation = (invitation_id) => {
+    return new Promise((resolve, reject) => {
+        mysqlInstance.query(
+            `delete from group_room_invites_table where invitation_id = "${invitation_id}"`,
+            (error1, response1) => {
+                if (error1) {
+                    console.log("delete invite", error1.message);
+                    reject({ error: error1.message });
+                    return;
+                }
+                console.log("invitation deleted", response1.affectedRows);
+                resolve({ message: "invitation deleted" });
+                return;
+            }
+        );
+    });
+};
+
+const getInvitationDetails = (invitation_id) => {
+    return new Promise((resolve, reject) => {
+        mysqlInstance.query(
+            `select * from group_room_invites_table where invitation_id = "${invitation_id}"`,
+            (error1, response1) => {
+                if (error1) {
+                    console.log("select invite", error1.message);
+                    reject({ error: error1.message });
+                    return;
+                }
+                console.log("invitation deleted", response1[0]);
+                resolve({ response: response1[0] });
                 return;
             }
         );
@@ -528,4 +753,8 @@ module.exports = {
     sendMessageToAllOnUserSignup,
     sendMessage,
     insertUserIntoRoom,
+    setActiveStatus,
+    addInvitation,
+    deleteInvitation,
+    getInvitationDetails,
 };

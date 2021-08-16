@@ -14,11 +14,15 @@ const {
     deleteMessage,
     onDeleteRoom,
     onRoomRequest,
+    onInviteUser,
+    onInvitationApproved,
+    onInvitationRejected,
 } = require("./Utils/eventHandlers");
 const {
     fetchRoomMessages,
-    removeActiveUser,
+    setActiveStatus,
     getUserDataFromJWT,
+    fetchAllUsers,
 } = require("./Utils/helpers");
 
 dotenv.config();
@@ -89,6 +93,10 @@ io.on("connection", (socket) => {
     // common handlers
     socket.on("user_joined", () => {
         onUserJoined(user_details, socket);
+        io.emit("refresh_all", {
+            changed_by: user_details.user_id,
+            type: "active_status",
+        });
     });
 
     // message/room handlers
@@ -98,6 +106,15 @@ io.on("connection", (socket) => {
 
     socket.on("room_request", () => {
         onRoomRequest(user_details, socket);
+    });
+
+    socket.on("all_users_request", () => {
+        fetchAllUsers(user_details.user_id)
+            .then(({ response }) => {
+                console.log(response);
+                socket.emit("all_users", { users: response });
+            })
+            .catch((e) => socket.emit("fetch_error", { error: e }));
     });
 
     socket.on("room_messages_request", ({ room_id }, callback) => {
@@ -120,7 +137,9 @@ io.on("connection", (socket) => {
     socket.on("delete_message", ({ room_id, message_id }, callback) => {
         deleteMessage(room_id, message_id)
             .then(({ messages }) => {
-                socket.broadcast.to(room_id).emit("room_chats", { messages });
+                socket.broadcast
+                    .to(room_id)
+                    .emit("room_chats", { room_id, messages });
                 io.emit("refresh_all", {
                     changed_by: room_id,
                     type: "chat_update",
@@ -142,38 +161,72 @@ io.on("connection", (socket) => {
     });
 
     // call handlers
-    socket.on("start_call", ({ room_id, my_peer_id }) => {
-        console.log("start-call", room_id, my_peer_id);
-        socket.broadcast.to(room_id).emit("call_initiated", {
-            initiators_details: {
-                peer_id: my_peer_id,
-                room_id,
-                socket_id: socket.id,
-            },
-        });
-    });
+    // socket.on("start_call", ({ room_id, my_peer_id }) => {
+    //     console.log("start-call", room_id, my_peer_id);
+    //     socket.broadcast.to(room_id).emit("call_initiated", {
+    //         initiators_details: {
+    //             peer_id: my_peer_id,
+    //             room_id,
+    //             socket_id: socket.id,
+    //         },
+    //     });
+    // });
 
-    socket.on(
-        "join_call_request",
-        ({ peer_id, host_socket_id, room_id, localStreamId }) => {
-            io.to(room_id).emit("user_call_join_request", {
-                peer_id,
-                room_id,
-                stream_id: localStreamId,
-                host_socket_id,
-            });
-        }
-    );
+    // socket.on(
+    //     "join_call_request",
+    //     ({ peer_id, host_socket_id, room_id, localStreamId }) => {
+    //         io.to(room_id).emit("user_call_join_request", {
+    //             peer_id,
+    //             room_id,
+    //             stream_id: localStreamId,
+    //             host_socket_id,
+    //         });
+    //     }
+    // );
 
     socket.on("typing_state", ({ state, user_id, room_id }) => {
         socket.broadcast
             .to(room_id)
             .emit("users_typing_state", { state, user_id, room_id });
     });
-    // socket.on("disconnect", () => {
-    //     console.log("user disconnected");
-    //     const data = getUserDataFromJWT(token);
-    // });
+
+    socket.on(
+        "invite_user",
+        ({ room_id, room_name, invited_to_user_id, invited_to_username }) => {
+            onInviteUser(
+                user_details,
+                room_id,
+                room_name,
+                invited_to_user_id,
+                invited_to_username
+            );
+        }
+    );
+
+    socket.on("invitation_approved", ({ invitation_id }) => {
+        onInvitationApproved(user_details, invitation_id, socket, io);
+    });
+
+    socket.on("invitation_rejected", ({ invitation_id }) => {
+        onInvitationRejected(user_details, invitation_id);
+    });
+
+    socket.on("disconnect", () => {
+        console.log("user disconnected");
+        setActiveStatus(user_details.user_id, "offline")
+            .then(() =>
+                console.log(
+                    "set active status",
+                    user_details.user_id,
+                    "offline"
+                )
+            )
+            .catch((e) => console.log("set active status error", e));
+        io.emit("refresh_all", {
+            changed_by: user_details.user_id,
+            type: "active_status",
+        });
+    });
 });
 
 app.use(auth);
@@ -181,8 +234,3 @@ app.use(auth);
 app.all("*", (req, res) => {
     res.send("Nothing");
 });
-
-/*
- *  on disconnect
- *    inform others
- */

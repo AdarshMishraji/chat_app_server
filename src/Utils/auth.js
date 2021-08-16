@@ -41,20 +41,19 @@ app.post("/signup", (req, res) => {
                             password,
                             salt,
                             (error, encryptedPassword) => {
+                                if (error) throw error;
+                                mysqlInstance.beginTransaction((err) => {
+                                    if (err) throw error;
+                                });
                                 mysqlInstance.query(
                                     `
                 insert into users_table (user_id, name, username, password, joined_at, jwt_token, fcm_token)
                 values ("${user_id}", "${name}", "${username}", "${encryptedPassword}", "${Date.now()}", "${token}", "${fcm_token}")`,
-                                    (error2, response2, fields2) => {
+                                    (error2, response2) => {
                                         if (error2) {
-                                            console.log(
-                                                "insert user into table",
-                                                error2.message
-                                            );
-                                            res.status(500).send({
-                                                error: "Internal error",
+                                            mysqlInstance.rollback(() => {
+                                                throw error2.message;
                                             });
-                                            return;
                                         }
                                         if (response2) {
                                             console.log(
@@ -68,16 +67,20 @@ app.post("/signup", (req, res) => {
                                                 username,
                                                 user_id
                                             );
-                                            res.status(200).send({
-                                                message:
-                                                    "User sign completed successfully.",
-                                                token,
-                                                user: {
-                                                    user_id,
-                                                    name,
-                                                    username,
-                                                    password,
-                                                },
+                                            mysqlInstance.commit((err) => {
+                                                if (err) throw err;
+                                                console.log("commited");
+                                                res.status(200).send({
+                                                    message:
+                                                        "User sign completed successfully.",
+                                                    token,
+                                                    user: {
+                                                        user_id,
+                                                        name,
+                                                        username,
+                                                        password,
+                                                    },
+                                                });
                                             });
                                             return;
                                         }
@@ -129,6 +132,7 @@ app.post("/login", (req, res) => {
                     );
                     updateToken(token, user_id)
                         .then(({ response: response2 }) => {
+                            mysqlInstance.commit();
                             res.status(200).send({
                                 message: "User login completed successfully",
                                 token,
@@ -137,10 +141,7 @@ app.post("/login", (req, res) => {
                             return;
                         })
                         .catch((e) => {
-                            res.status(500).send({
-                                error: "Internal error",
-                            });
-                            return;
+                            throw e;
                         });
                 }
             })
@@ -160,35 +161,40 @@ app.post("/logout", (req, res) => {
     if (token && typeof token === "string") {
         const data = getUserDataFromJWT(token);
         if (data) {
-            mysqlInstance.query(
-                `select * from logged_in_users where user_id="${data.user_id}"`,
-                (error1, response1, fields1) => {
-                    if (error1) {
-                        console.log("fetching user from db", error1);
-                        res.status(500).send({ error: "Internal error" });
-                        return;
-                    }
-                    if (response1.length === 0) {
-                        res.status(400).send({
-                            error: "User already logged out from somewhere or not exists",
-                        });
-                        return;
-                    }
-                    updateToken("", data.user_id)
-                        .then(({ response }) => {
-                            res.status(200).send({
-                                message: "User logged out successfully.",
+            try {
+                mysqlInstance.query(
+                    `select * from logged_in_users where user_id="${data.user_id}"`,
+                    (error1, response1, fields1) => {
+                        if (error1) {
+                            console.log("fetching user from db", error1);
+                            res.status(500).send({ error: "Internal error" });
+                            return;
+                        }
+                        if (response1.length === 0) {
+                            res.status(400).send({
+                                error: "User already logged out from somewhere or not exists",
                             });
                             return;
-                        })
-                        .catch((e) => {
-                            res.status(500).send({
-                                error: "Internal error",
+                        }
+                        updateToken("", data.user_id)
+                            .then(({ response }) => {
+                                res.status(200).send({
+                                    message: "User logged out successfully.",
+                                });
+                                return;
+                            })
+                            .catch((e) => {
+                                throw e;
                             });
-                            return;
-                        });
-                }
-            );
+                    }
+                );
+            } catch (err) {
+                console.log("logout error", err);
+                res.status(500).send({
+                    error: "Internal error",
+                });
+                return;
+            }
         } else {
             res.status(404).send({ error: "Token already expires." });
         }
@@ -282,38 +288,35 @@ app.post("/update_user_details", (req, res) => {
                         res.status(400).send({ error: "Invalid data" });
                         return;
                     }
-                    mysqlInstance.query(query, (error, response) => {
-                        if (error) {
-                            console.log("update details", error.message);
-                            res.status(500).send({
-                                error: "Internal error",
+                    mysqlInstance.beginTransaction((err) => {
+                        if (err) throw err;
+                        mysqlInstance.query(query, (error, response) => {
+                            if (error) throw error.message;
+                            console.log(
+                                "details updated",
+                                response.affectedRows,
+                                new_token,
+                                token
+                            );
+                            mysqlInstance.commit((err) => {
+                                if (err) throw err.message;
+                                console.log("commited");
+                                updateToken(new_token, user.user_id)
+                                    .then(() => {
+                                        res.locals.io.emit("refresh_all", {
+                                            changed_by: user.user_id,
+                                        });
+                                        res.status(200).send({
+                                            message: "User details updated",
+                                            new_token,
+                                        });
+                                        return;
+                                    })
+                                    .catch((err) => {
+                                        throw err;
+                                    });
                             });
-                            return;
-                        }
-                        console.log(
-                            "details updated",
-                            response.affectedRows,
-                            new_token,
-                            token
-                        );
-                        updateToken(new_token, user.user_id)
-                            .then(() => {
-                                res.locals.io.emit("refresh_all", {
-                                    changed_by: user.user_id,
-                                });
-                                res.status(200).send({
-                                    message: "User details updated",
-                                    new_token,
-                                });
-                                return;
-                            })
-                            .catch((err) => {
-                                console.log("error at update details", err);
-                                res.status(500).send({
-                                    error: "Internal error",
-                                });
-                                return;
-                            });
+                        });
                     });
                 }
             })

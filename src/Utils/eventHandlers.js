@@ -8,12 +8,19 @@ const {
     fetchCommonRoomAndJoinedUsers,
     fetchAllUsers,
     deleteMessage,
-    fetchOtherRoomUsers,
     sendMessage,
     insertUserIntoRoom,
+    setActiveStatus,
+    addInvitation,
+    fetchUserFromUserID,
+    deleteInvitation,
+    getInvitationDetails,
 } = require("./helpers");
 
 const onUserJoined = (data, socket) => {
+    setActiveStatus(data.user_id, "online")
+        .then(() => console.log("set active status", data.user_id, "online"))
+        .catch((e) => console.log("set active status error", e));
     fetchCommonRoomAndJoinedUsers(data.user_id)
         .then(({ response }) => {
             console.log("then");
@@ -22,7 +29,6 @@ const onUserJoined = (data, socket) => {
             });
             socket.join(room_ids);
             console.log(socket.rooms);
-            socket.broadcast.to(room_ids).emit("a_user_joined", { user: data });
             socket.emit("room_people_data", { response });
         })
         .catch((e) => {
@@ -50,6 +56,22 @@ const onJoinWithUsers = (user_id, data, groupName, socket, io) => {
                     room_id,
                     type: "group",
                 });
+
+                sendMessage(
+                    {
+                        message: `${data.username} has created the group`,
+                        type: "admin_msg",
+                        room_id,
+                        send_at: Date.now(),
+                        from_user_id: "admin",
+                        from_user_name: "admin",
+                    },
+                    socket,
+                    io
+                )
+                    .then(() => console.log("message sent"))
+                    .catch((e) => console.log("send msg error", e));
+
                 fetchCommonRoomAndJoinedUsers(data.user_id).then(
                     ({ response }) => {
                         console.log("then");
@@ -101,7 +123,7 @@ const onJoinWithUsers = (user_id, data, groupName, socket, io) => {
                                 response1[0].room_id
                             );
                             if (messages) {
-                                socket.emit("room_chats", {
+                                socket.emit("room_chats_on_click", {
                                     room_id: response1[0].room_id,
                                     messages,
                                 });
@@ -127,7 +149,9 @@ const onMessageRecieved = (message, socket, io) => {
         insertUserIntoRoom(
             message.room_id,
             message.other_user_id,
+            "normal",
             message.room_type,
+            "",
             io
         )
             .then(() => console.log("user inserted"))
@@ -151,41 +175,57 @@ const onDeleteRoom = (room_id, user_details, socket, callback) => {
                     reject({ error: "room is not empty" });
                     return;
                 }
-
-                mysqlInstance.query(
-                    `delete from users_rooms_table where room_id = "${room_id}"`,
-                    (error1, response1) => {
-                        if (error1) {
-                            console.log("delete room", error1.message);
-                            reject({ error: error1.message });
-                            return;
-                        }
-                        console.log(
-                            "delete room affect1",
-                            response1.affectedRows
-                        );
-                        mysqlInstance.query(
-                            `delete from rooms_table where room_id = "${room_id}"`,
-                            (error2, response2) => {
-                                if (error2) {
-                                    console.log(
-                                        "delete room 2",
-                                        error2.message
-                                    );
-                                    reject({ error: error2.message });
-                                    return;
-                                }
-                                console.log(
-                                    "delete room affect1",
-                                    response2.affectedRows
-                                );
-                                callback({ message: "Room deleted" });
-                                onUserJoined(user_details, socket);
-                                resolve({ message: "Room deleted" });
+                mysqlInstance.beginTransaction((err) => {
+                    if (err) reject({ error: err.message });
+                    mysqlInstance.query(
+                        `delete from users_rooms_table where room_id = "${room_id}"`,
+                        (error1, response1) => {
+                            if (error1) {
+                                console.log("delete room", error1.message);
+                                mysqlInstance.rollback(() => {
+                                    reject({ error: error1.message });
+                                });
+                                return;
                             }
-                        );
-                    }
-                );
+                            console.log(
+                                "delete room affect1",
+                                response1.affectedRows
+                            );
+                            mysqlInstance.query(
+                                `delete from rooms_table where room_id = "${room_id}"`,
+                                (error2, response2) => {
+                                    if (error2) {
+                                        console.log(
+                                            "delete room 2",
+                                            error2.message
+                                        );
+                                        mysqlInstance.rollback(() => {
+                                            reject({ error: error2.message });
+                                        });
+                                        return;
+                                    }
+                                    mysqlInstance.commit((err) => {
+                                        if (err) {
+                                            console.log(
+                                                "commit error",
+                                                err.message
+                                            );
+                                            reject({ error: err.message });
+                                            return;
+                                        }
+                                        console.log(
+                                            "delete room affect1",
+                                            response2.affectedRows
+                                        );
+                                        callback({ message: "Room deleted" });
+                                        onUserJoined(user_details, socket);
+                                        resolve({ message: "Room deleted" });
+                                    });
+                                }
+                            );
+                        }
+                    );
+                });
             }
         );
     });
@@ -200,6 +240,99 @@ const onRoomRequest = (data, socket) => {
     });
 };
 
+const onInviteUser = (
+    data,
+    room_id,
+    room_name,
+    invited_to_user_id,
+    invited_to_username
+) => {
+    addInvitation(
+        data.user_id,
+        data.username,
+        invited_to_user_id,
+        invited_to_username,
+        room_id,
+        room_name
+    ).then(() => {
+        fetchUserFromUserID(invited_to_user_id, "fcm_token").then(
+            ({ response }) => {
+                adminSdk.messaging().sendToDevice(response.fcm_token, {
+                    notification: {
+                        title: "Group Invitation",
+                        body: `${data.username} is invited you to join the group "${room_name}"`,
+                    },
+                });
+            }
+        );
+    });
+};
+
+const onInvitationApproved = (data, invitation_id, socket, io) => {
+    getInvitationDetails(invitation_id).then(({ response }) => {
+        deleteInvitation(invitation_id).then(() => {
+            insertUserIntoRoom(
+                response.group_room_id,
+                response.invited_to_user_id,
+                "group",
+                response.group_room_name,
+                io
+            )
+                .then(() => {
+                    console.log("inserted");
+                    io.emit("refresh_all", {
+                        type: "chat_update",
+                        changed_by: data.user_id,
+                    });
+                })
+                .catch((e) => console.log("error invitation", e));
+
+            sendMessage(
+                {
+                    message: `${data.username} has joined the group`,
+                    type: "admin_msg",
+                    room_id: response.group_room_id,
+                    send_at: Date.now(),
+                    from_user_id: "admin",
+                    from_user_name: "admin",
+                },
+                socket,
+                io
+            )
+                .then(() => console.log("message sent"))
+                .catch((e) => console.log("send msg error", e));
+
+            fetchUserFromUserID(response.invited_by_user_id, "fcm_token").then(
+                ({ response }) => {
+                    adminSdk.messaging().sendToDevice(response.fcm_token, {
+                        notification: {
+                            title: "Group Invitation Accepted",
+                            body: `${data.username} has accepted your invitation for joining the group ${response.group_room_name}"`,
+                        },
+                    });
+                }
+            );
+        });
+    });
+};
+
+const onInvitationRejected = (data, invitation_id) => {
+    getInvitationDetails(invitation_id).then(({ response }) => {
+        deleteInvitation(invitation_id).then(() => {
+            fetchUserFromUserID(response.invited_by_user_id, "fcm_token").then(
+                ({ response }) => {
+                    adminSdk.messaging().sendToDevice(response.fcm_token, {
+                        notification: {
+                            title: "Group Invitation Rejected",
+                            body: `${data.username} has rejected your invitation for joining the group ${response.group_room_name}"`,
+                        },
+                    });
+                }
+            );
+        });
+    });
+};
+
 module.exports = {
     onUserJoined,
     onJoinWithUsers,
@@ -207,4 +340,7 @@ module.exports = {
     deleteMessage,
     onDeleteRoom,
     onRoomRequest,
+    onInviteUser,
+    onInvitationApproved,
+    onInvitationRejected,
 };
