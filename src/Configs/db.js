@@ -16,4 +16,17 @@ connection.connect((err) => {
     else console.log("Successfully connected to mysql database.");
 });
 
+setInterval(() => {
+    connection.ping((err) => {
+        if (err) {
+            connection.connect((err) => {
+                if (err) console.log(err);
+                else console.log("Successfully connected to mysql database.");
+            });
+        } else {
+            console.log("pinged");
+        }
+    });
+}, 10000);
+
 module.exports = connection;

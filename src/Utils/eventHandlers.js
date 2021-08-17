@@ -51,11 +51,19 @@ const onJoinWithUsers = (user_id, data, groupName, socket, io) => {
             .then(({ room_id }) => {
                 socket.join(room_id);
                 console.log(socket.rooms);
-                io.to(room_id).emit("room_created_and_joined", {
-                    message: "a room is created and you have joined",
-                    room_id,
-                    type: "group",
-                });
+                fetchCommonRoomAndJoinedUsers(data.user_id).then(
+                    ({ response }) => {
+                        console.log("then");
+                        socket.emit("room_people_data", {
+                            response,
+                        });
+                        io.to(room_id).emit("room_created_and_joined", {
+                            message: "a room is created and you have joined",
+                            room_id,
+                            type: "group",
+                        });
+                    }
+                );
 
                 sendMessage(
                     {
@@ -72,14 +80,6 @@ const onJoinWithUsers = (user_id, data, groupName, socket, io) => {
                     .then(() => console.log("message sent"))
                     .catch((e) => console.log("send msg error", e));
 
-                fetchCommonRoomAndJoinedUsers(data.user_id).then(
-                    ({ response }) => {
-                        console.log("then");
-                        socket.emit("room_people_data", {
-                            response,
-                        });
-                    }
-                );
                 return;
             })
             .catch((e) => {
@@ -140,7 +140,7 @@ const onJoinWithUsers = (user_id, data, groupName, socket, io) => {
     }
 };
 
-const onMessageRecieved = (message, socket, io) => {
+const onMessageRecieved = (message, socket, io, callback) => {
     console.log("message", message);
     if (
         message.room_type === "duet" &&
@@ -158,7 +158,10 @@ const onMessageRecieved = (message, socket, io) => {
             .catch((e) => console.log(e));
     }
     sendMessage(message, socket, io)
-        .then(() => console.log("message sent"))
+        .then(() => {
+            console.log("message sent");
+            callback();
+        })
         .catch((e) => console.log("message error", e));
 };
 
@@ -238,6 +241,51 @@ const onRoomRequest = (data, socket) => {
             response,
         });
     });
+};
+
+const onMakeAdmin = (user_details, user_id, room_id, io, callback) => {
+    mysqlInstance.query(
+        `select if (role = 'admin', 'true', 'false') as isAdmin from users_rooms_table urt where user_id = "${user_details.user_id}" and room_id = "${room_id}"`,
+        (error, response) => {
+            if (error) {
+                callback({ error: error.message });
+                return;
+            }
+            if (response[0].isAdmin === "true") {
+                mysqlInstance.beginTransaction((err) => {
+                    if (err) {
+                        callback({ error: err.message });
+                        return;
+                    }
+                    mysqlInstance.query(
+                        `update users_rooms_table set role = "admin" where room_id = "${room_id}" and user_id = "${user_id}"`,
+                        (error, response) => {
+                            if (error) {
+                                mysqlInstance.rollback(() => {
+                                    callback({ error: error.message });
+                                    return;
+                                });
+                            }
+                            mysqlInstance.commit((err) => {
+                                if (err) {
+                                    callback({ error: error.message });
+                                    return;
+                                }
+                                io.emit("refresh_all", {
+                                    changed_by: user_details.user_id,
+                                    type: "chat_update",
+                                });
+                                return;
+                            });
+                        }
+                    );
+                });
+            } else {
+                callback({ error: "You are not a admin" });
+                return;
+            }
+        }
+    );
 };
 
 const onInviteUser = (
@@ -343,4 +391,5 @@ module.exports = {
     onInviteUser,
     onInvitationApproved,
     onInvitationRejected,
+    onMakeAdmin,
 };

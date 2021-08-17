@@ -421,6 +421,7 @@ const userWithUserdIDs = (user_ids, per_room, users) => {
                             };
                             per_room[key].users[index] = data;
                         });
+                        console.log("per room key", key, per_room[key].users);
                     }
                     resolve({ response: per_room });
                 } else {

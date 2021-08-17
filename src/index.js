@@ -17,6 +17,7 @@ const {
     onInviteUser,
     onInvitationApproved,
     onInvitationRejected,
+    onMakeAdmin,
 } = require("./Utils/eventHandlers");
 const {
     fetchRoomMessages,
@@ -129,8 +130,7 @@ io.on("connection", (socket) => {
     });
 
     socket.on("room_message_send", ({ message }, callback) => {
-        callback();
-        onMessageRecieved(message, socket, io);
+        onMessageRecieved(message, socket, io, callback);
         // sendMessagesToInactive();
     });
 
@@ -188,6 +188,10 @@ io.on("connection", (socket) => {
         socket.broadcast
             .to(room_id)
             .emit("users_typing_state", { state, user_id, room_id });
+    });
+
+    socket.on("make_admin", ({ user_id, room_id }, callback) => {
+        onMakeAdmin(user_details, user_id, room_id, io, callback);
     });
 
     socket.on(
