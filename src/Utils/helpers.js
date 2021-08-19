@@ -177,10 +177,13 @@ const verifyToken = (token, fcm_token) => {
     });
 };
 
-const fetchRoomMessages = (room_id) => {
+const fetchRoomMessages = (room_id, limit) => {
     console.log(room_id);
     return new Promise((resolve, reject) => {
-        const query = `select message_id, cast(aes_decrypt(message, "${room_id}_${process.env.SECRET_KEY}")as char) as message, type, send_at, room_id, from_user_id, from_username, reply_to_message_id, cast(aes_decrypt(reply_to_message_text, "${room_id}_${process.env.SECRET_KEY}")as char) as reply_to_message_text from messages_table where room_id="${room_id}" order by send_at`;
+        const query =
+            `select message_id, cast(aes_decrypt(message, "${room_id}_${process.env.SECRET_KEY}")as char) as message, type, send_at, room_id, from_user_id, from_username, reply_to_message_id, cast(aes_decrypt(reply_to_message_text, "${room_id}_${process.env.SECRET_KEY}")as char) as reply_to_message_text, ` +
+            "`seen-by_at` " +
+            `from messages_table where room_id="${room_id}" order by send_at desc limit ${limit}`;
         console.log(query);
         mysqlInstance.query(query, (error1, response1) => {
             if (error1) {
@@ -188,6 +191,7 @@ const fetchRoomMessages = (room_id) => {
                 reject({ error: error1.message });
                 return;
             }
+            response1.reverse();
             resolve({ messages: response1 });
             return;
         });
@@ -202,24 +206,24 @@ const createAndJoinRoom = (my_user_id, other_user_id, type, groupName) => {
             if (err) {
                 reject({ error: err.message });
             }
-            mysqlInstance.query(
-                `insert into rooms_table values ("${room_id}")`,
-                (error1, response1) => {
-                    if (error1) {
-                        console.log("create room", error1.message);
-                        mysqlInstance.rollback(() => {
-                            reject({ error: error1.message });
-                        });
-                        return;
-                    }
-                    if (type === "string") {
+            if (type === "string") {
+                mysqlInstance.query(
+                    `insert into rooms_table values ("${room_id}", "duet", "")`,
+                    (error1, response1) => {
+                        if (error1) {
+                            console.log("create room", error1.message);
+                            mysqlInstance.rollback(() => {
+                                reject({ error: error1.message });
+                            });
+                            return;
+                        }
                         console.log("inside type string", type);
                         mysqlInstance.query(
                             `insert into users_rooms_table values 
-                    ("${room_id}", "${my_user_id}", "normal", "duet", "")
+                    ("${room_id}", "${my_user_id}", "normal")
                     ${
                         other_user_id
-                            ? `,("${room_id}", "${other_user_id}", "normal", "duet", "")}`
+                            ? `,("${room_id}", "${other_user_id}", "normal")`
                             : ""
                     }`,
                             (error2, response2) => {
@@ -257,12 +261,24 @@ const createAndJoinRoom = (my_user_id, other_user_id, type, groupName) => {
                                 return;
                             }
                         );
-                    } else {
-                        console.log("type object", other_user_id);
+                    }
+                );
+            } else {
+                console.log("type object", other_user_id);
+                mysqlInstance.query(
+                    `insert into rooms_table values ("${room_id}", "group", "${groupName}")`,
+                    (error1, response1) => {
+                        if (error1) {
+                            console.log("create room", error1.message);
+                            mysqlInstance.rollback(() => {
+                                reject({ error: error1.message });
+                            });
+                            return;
+                        }
                         const query = `insert into users_rooms_table value
-                                ("${room_id}", "${my_user_id}", "admin", "group", "${groupName}"),
+                                ("${room_id}", "${my_user_id}", "admin"),
                                 ${other_user_id.map((id) => {
-                                    return `("${room_id}", "${id}", "normal", "group", "${groupName}")`;
+                                    return `("${room_id}", "${id}", "normal")`;
                                 })}
                                 `;
                         console.log("query", query);
@@ -294,12 +310,10 @@ const createAndJoinRoom = (my_user_id, other_user_id, type, groupName) => {
                             });
                             return;
                         });
-                        // });
                     }
-                }
-            );
+                );
+            }
         });
-        // });
     });
 };
 
@@ -334,13 +348,11 @@ const fetchCommonRoomAndJoinedUsers = (my_user_id) => {
                 if (response1.length !== 0) {
                     const users = {};
                     const per_room = {};
-                    const room_names = {};
                     for (let i = 0; i < response1.length; i++) {
                         let room_id = response1[i].room_id;
                         let user_id = response1[i].user_id;
                         if (per_room[room_id] === undefined) {
                             per_room[room_id] = {
-                                room_type: response1[i].room_type,
                                 users: [],
                             };
                         }
@@ -351,15 +363,34 @@ const fetchCommonRoomAndJoinedUsers = (my_user_id) => {
                             user_id,
                             role: response1[i].role,
                         });
-                        room_names[room_id] = response1[i].room_name;
                     }
                     const user_ids = JSON.stringify(Object.keys(users))
-                        .replace("[", "")
-                        .replace("]", "");
+                        .replace("[", "(")
+                        .replace("]", ")");
 
-                    const room_ids = JSON.stringify(Object.keys(room_names))
-                        .replace("[", "")
-                        .replace("]", "");
+                    const room_ids = JSON.stringify(Object.keys(per_room))
+                        .replace("[", "(")
+                        .replace("]", ")");
+
+                    mysqlInstance.query(
+                        `select * from rooms_table where room_id in ${room_ids}`,
+                        (err, res) => {
+                            if (err) {
+                                console.log("fetch room det", err.message);
+                                reject({ error: error1.message });
+                                return;
+                            }
+
+                            for (let i = 0; i < res.length; i++) {
+                                let room_id = res[i].room_id;
+                                per_room[room_id] = {
+                                    ...per_room[room_id],
+                                    type: res[i].room_type,
+                                    room_name: res[i].room_name,
+                                };
+                            }
+                        }
+                    );
 
                     let new_res = [];
 
@@ -378,12 +409,13 @@ const fetchCommonRoomAndJoinedUsers = (my_user_id) => {
                         )) {
                             new_res.push({
                                 room_id: key,
-                                type: value.room_type,
-                                room_name: room_names[key],
-                                users: value.users,
+                                ...value,
                                 last_msg: room_last_msg[key],
                             });
                         }
+                        new_res.sort(
+                            (a, b) => b.last_msg.send_at - a.last_msg.send_at
+                        );
                         resolve({ response: new_res });
                     });
                 } else {
@@ -397,7 +429,7 @@ const fetchCommonRoomAndJoinedUsers = (my_user_id) => {
 const userWithUserdIDs = (user_ids, per_room, users) => {
     return new Promise((resolve, reject) => {
         mysqlInstance.query(
-            `select ut.user_id, ut.username, ut.name from users_table ut where ut.user_id in (${user_ids}) order by user_id`,
+            `select ut.user_id, ut.username, ut.name from users_table ut where ut.user_id in ${user_ids} order by user_id`,
             (error, response) => {
                 if (error) {
                     console.log("fetch common2", error.message);
@@ -436,7 +468,7 @@ const fetchLastMessage = (room_ids) => {
     return new Promise((resolve, reject) => {
         mysqlInstance.query(
             `select message_id, cast(aes_decrypt(message, concat( room_id , "_${process.env.SECRET_KEY}"))as char) as message, type, send_at, room_id, from_user_id, from_username 
-                from messages_table where room_id in (${room_ids}) and send_at in (select max(send_at) from messages_table mt where true group by room_id);`,
+                from messages_table where room_id in ${room_ids} and send_at in (select max(send_at) from messages_table mt where true group by room_id);`,
             (error, response) => {
                 if (error) {
                     console.log("fetch last msg", error.message);
@@ -475,7 +507,7 @@ const deleteMessage = (room_id, message_id) => {
                             return;
                         }
                         console.log("commited");
-                        fetchRoomMessages(room_id).then(({ messages }) => {
+                        fetchRoomMessages(room_id, 25).then(({ messages }) => {
                             resolve({ messages });
                         });
                     });
@@ -619,19 +651,12 @@ const sendMessage = (message, socket, io) => {
     });
 };
 
-const insertUserIntoRoom = (
-    room_id,
-    other_user_id,
-    role,
-    room_type,
-    room_name,
-    io
-) => {
+const insertUserIntoRoom = (room_id, other_user_id, role, io) => {
     return new Promise((resolve, reject) => {
         mysqlInstance.beginTransaction((err) => {
             if (err) reject({ error: err.message });
             mysqlInstance.query(
-                `insert into users_rooms_table value ("${room_id}", "${other_user_id}", "${role}",  "${room_type}", "${room_name}")`,
+                `insert into users_rooms_table value ("${room_id}", "${other_user_id}", "${role}")`,
                 (error, response) => {
                     if (error) {
                         console.log("error while insert user", error.message);
@@ -646,7 +671,7 @@ const insertUserIntoRoom = (
                             reject({ error: error.message });
                             return;
                         }
-                        console.log("commited");
+                        console.log("commited", response.affectedRows);
                         io.emit("refresh_all", {
                             type: "chat_update",
                             changed_by: null,
@@ -739,6 +764,107 @@ const getInvitationDetails = (invitation_id) => {
     });
 };
 
+const setRoomMessagesSeen = (
+    room_id,
+    my_details,
+    should_allow_seen,
+    socket
+) => {
+    // const query =
+    //     "update messages_table  set `seen-by_at`" +
+    //     `= '{"${
+    //         my_details.user_id
+    //     }":"${Date.now()}"}' where room_id = "${room_id}" and from_user_id != "${
+    //         my_details.user_id
+    //     }" and ` +
+    // "ISNULL(`seen-by_at`)" +
+    // " or !JSON_CONTAINS_PATH(`seen-by_at`,'one'," +
+    // ` '$."${my_details.user_id}"');`;
+    // console.log("setRoomMessagesSeen query", query);
+
+    const query =
+        "select message_id, `seen-by_at` " +
+        `from messages_table where room_id="${room_id}" and from_user_id != "${my_details.user_id}" order by send_at desc`;
+
+    mysqlInstance.query(query, (err, res) => {
+        if (err) {
+            return;
+        }
+        if (res.length > 0) {
+            const message_ids = [];
+            for (let i = 0; i < res.length; i++) {
+                let ele = res[i];
+                if (
+                    ele["seen-by_at"] !== null &&
+                    (Object.keys(ele["seen-by_at"]).includes(
+                        my_details.user_id
+                    ) ||
+                        Object.keys(ele["seen-by_at"]).includes(
+                            my_details.user_id + "_(no_seen_allowed)"
+                        ))
+                ) {
+                    break;
+                }
+                if (
+                    ele["seen-by_at"] === null ||
+                    !Object.keys(ele["seen-by_at"]).includes(my_details.user_id)
+                ) {
+                    message_ids.push(ele.message_id);
+                }
+            }
+            console.log("message_ids not seen", message_ids);
+            if (message_ids.length !== 0) {
+                const message_ids_string = JSON.stringify(message_ids)
+                    .replace("[", "(")
+                    .replace("]", ")");
+                const now = Date.now();
+                mysqlInstance.beginTransaction((err) => {
+                    if (err) {
+                        return;
+                    }
+                    const new_obj = should_allow_seen
+                        ? ` '{"${my_details.user_id}": "${now}"}')`
+                        : ` '{"${
+                              my_details.user_id + "_(no_seen_allowed)"
+                          }": ""}')`;
+                    const q =
+                        "update messages_table set `seen-by_at` = JSON_MERGE(if (ISNULL(`seen-by_at`)," +
+                        ` "{}"` +
+                        ", `seen-by_at`)," +
+                        new_obj +
+                        ` where message_id in ${message_ids_string}`;
+                    console.log(q);
+                    mysqlInstance.query(q, (err, res) => {
+                        if (err) {
+                            console.log("errr", err.message);
+                            mysqlInstance.rollback(() => {
+                                console.log("rollbacked");
+                            });
+                            return;
+                        }
+                        mysqlInstance.commit((err) => {
+                            if (err) {
+                                return;
+                            }
+                            console.log(res.affectedRows);
+                            fetchRoomMessages(room_id, 15).then(
+                                ({ messages }) => {
+                                    socket.broadcast
+                                        .to(room_id)
+                                        .emit("room_messages", {
+                                            room_id,
+                                            messages,
+                                        });
+                                }
+                            );
+                        });
+                    });
+                });
+            }
+        }
+    });
+};
+
 module.exports = {
     getUserDataFromJWT,
     verifyToken,
@@ -758,4 +884,5 @@ module.exports = {
     addInvitation,
     deleteInvitation,
     getInvitationDetails,
+    setRoomMessagesSeen,
 };

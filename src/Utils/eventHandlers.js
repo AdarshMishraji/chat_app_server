@@ -51,6 +51,21 @@ const onJoinWithUsers = (user_id, data, groupName, socket, io) => {
             .then(({ room_id }) => {
                 socket.join(room_id);
                 console.log(socket.rooms);
+                sendMessage(
+                    {
+                        message: `${data.username} has created the group`,
+                        type: "admin_msg",
+                        room_id,
+                        send_at: Date.now(),
+                        from_user_id: "Admin",
+                        from_username: "Admin",
+                    },
+                    socket,
+                    io
+                )
+                    .then(() => console.log("message sent"))
+                    .catch((e) => console.log("send msg error", e));
+
                 fetchCommonRoomAndJoinedUsers(data.user_id).then(
                     ({ response }) => {
                         console.log("then");
@@ -65,21 +80,6 @@ const onJoinWithUsers = (user_id, data, groupName, socket, io) => {
                     }
                 );
 
-                sendMessage(
-                    {
-                        message: `${data.username} has created the group`,
-                        type: "admin_msg",
-                        room_id,
-                        send_at: Date.now(),
-                        from_user_id: "admin",
-                        from_user_name: "admin",
-                    },
-                    socket,
-                    io
-                )
-                    .then(() => console.log("message sent"))
-                    .catch((e) => console.log("send msg error", e));
-
                 return;
             })
             .catch((e) => {
@@ -88,7 +88,9 @@ const onJoinWithUsers = (user_id, data, groupName, socket, io) => {
             });
     } else {
         mysqlInstance.query(
-            `select distinct(room_id) from users_rooms_table where user_id="${data.user_id}" and room_type="duet" and room_id = any(select room_id from users_rooms_table where user_id="${user_id}")`,
+            `select distinct(room_id) from users_rooms_table where user_id="${data.user_id}" and room_id =
+            any(select room_id from rooms_table rt  where room_id =
+            any(select room_id from users_rooms_table where user_id="${user_id}") and room_type = "duet")`,
             (error1, response1) => {
                 if (error1) {
                     console.log("on user joined", error1);
@@ -115,7 +117,7 @@ const onJoinWithUsers = (user_id, data, groupName, socket, io) => {
                             socket.emit("fetch_error", { error: e });
                         });
                 } else {
-                    fetchRoomMessages(response1[0].room_id)
+                    fetchRoomMessages(response1[0].room_id, 15)
                         .then(({ messages }) => {
                             console.log(
                                 "all room chats",
@@ -146,14 +148,7 @@ const onMessageRecieved = (message, socket, io, callback) => {
         message.room_type === "duet" &&
         message.action === "insert_other_user_into_duet_room"
     ) {
-        insertUserIntoRoom(
-            message.room_id,
-            message.other_user_id,
-            "normal",
-            message.room_type,
-            "",
-            io
-        )
+        insertUserIntoRoom(message.room_id, message.other_user_id, "normal", io)
             .then(() => console.log("user inserted"))
             .catch((e) => console.log(e));
     }

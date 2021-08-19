@@ -3,7 +3,7 @@ const cors = require("cors");
 const dotenv = require("dotenv");
 const cookie_parser = require("cookie-parser");
 const express_rate_limit = require("express-rate-limit");
-const { ExpressPeerServer } = require("peer");
+// const { ExpressPeerServer } = require("peer");
 
 const auth = require("./Utils/auth");
 const socket = require("./Configs/socket");
@@ -24,6 +24,8 @@ const {
     setActiveStatus,
     getUserDataFromJWT,
     fetchAllUsers,
+    setRoomMessagesSeen,
+    fetchCommonRoomAndJoinedUsers,
 } = require("./Utils/helpers");
 
 dotenv.config();
@@ -56,7 +58,7 @@ const server = app.listen(PORT, () => {
 });
 
 const io = socket(server);
-const peerServer = ExpressPeerServer(server, { port: 443 });
+// const peerServer = ExpressPeerServer(server, { port: 443 });
 
 app.use(limiter);
 app.use(express.json());
@@ -65,19 +67,19 @@ app.use((req, res, next) => {
     next();
 });
 app.use(cookie_parser(process.env.SECRET_KEY));
-app.use("/peerjs", peerServer);
+// app.use("/peerjs", peerServer);
 
-peerServer.on("connection", (client) => {
-    console.log("peer server connected to client", client.getId());
-});
+// peerServer.on("connection", (client) => {
+//     console.log("peer server connected to client", client.getId());
+// });
 
-peerServer.on("error", (e) => {
-    console.log("peer error", e.message);
-});
+// peerServer.on("error", (e) => {
+//     console.log("peer error", e.message);
+// });
 
-peerServer.on("disconnect", (client) => {
-    console.log("peer disconnected", client.getId());
-});
+// peerServer.on("disconnect", (client) => {
+//     console.log("peer disconnected", client.getId());
+// });
 
 io.on("connection", (socket) => {
     const { token } = socket.handshake.auth;
@@ -118,10 +120,26 @@ io.on("connection", (socket) => {
             .catch((e) => socket.emit("fetch_error", { error: e }));
     });
 
-    socket.on("room_messages_request", ({ room_id }, callback) => {
-        fetchRoomMessages(room_id)
-            .then(({ messages }) => {
-                callback({ messages });
+    socket.on("my_rooms_request", () => {
+        fetchCommonRoomAndJoinedUsers(user_details.user_id)
+            .then(({ response }) => {
+                console.log("then");
+                const room_ids = response.map((res) => {
+                    return res.room_id;
+                });
+                console.log(socket.rooms);
+                socket.emit("room_people_data", { response });
+            })
+            .catch((e) => {
+                console.log("error", e);
+                socket.emit("fetch_error", { error: e });
+            });
+    });
+
+    socket.on("room_messages_request", ({ room_id, limit }, callback) => {
+        fetchRoomMessages(room_id, limit)
+            .then((m) => {
+                callback(m);
             })
             .catch((e) => {
                 console.log("error rmr", e);
@@ -131,7 +149,10 @@ io.on("connection", (socket) => {
 
     socket.on("room_message_send", ({ message }, callback) => {
         onMessageRecieved(message, socket, io, callback);
-        // sendMessagesToInactive();
+    });
+
+    socket.on("seen_the_unseen_messages", ({ room_id, should_allow_seen }) => {
+        setRoomMessagesSeen(room_id, user_details, should_allow_seen, socket);
     });
 
     socket.on("delete_message", ({ room_id, message_id }, callback) => {
