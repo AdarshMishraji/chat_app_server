@@ -283,95 +283,183 @@ const onMakeAdmin = (user_details, user_id, room_id, io, callback) => {
     );
 };
 
-const onInviteUser = (
-    data,
-    room_id,
-    room_name,
-    invited_to_user_id,
-    invited_to_username
-) => {
-    addInvitation(
-        data.user_id,
-        data.username,
-        invited_to_user_id,
-        invited_to_username,
-        room_id,
-        room_name
-    ).then(() => {
-        fetchUserFromUserID(invited_to_user_id, "fcm_token").then(
-            ({ response }) => {
-                adminSdk.messaging().sendToDevice(response.fcm_token, {
-                    notification: {
-                        title: "Group Invitation",
-                        body: `${data.username} is invited you to join the group "${room_name}"`,
-                    },
-                });
+const onInviteUser = (data, room_id, room_name, invited_to_users, callback) => {
+    console.log(
+        `select invitation_id from group_room_invites_table where invited_to_user_id in (${invited_to_users.map(
+            (user) => `"${user.user_id}"`
+        )})`
+    );
+    mysqlInstance.query(
+        `select invitation_id from group_room_invites_table where invited_to_user_id in (${invited_to_users.map(
+            (user) => `"${user.user_id}"`
+        )})`,
+        (err, res) => {
+            if (err) {
+                console.log("invite error", err.message);
+                return;
             }
-        );
-    });
+            console.log(res);
+            if (res.length === 0) {
+                addInvitation(
+                    data.user_id,
+                    data.username,
+                    invited_to_users,
+                    room_id,
+                    room_name
+                ).then(() => {
+                    callback();
+                    fetchUserFromUserID(invited_to_users, "fcm_token").then(
+                        ({ response }) => {
+                            if (response.length > 0) {
+                                const fcm_tokens = [];
+                                response.forEach(({ fcm_token }) => {
+                                    if (fcm_token !== "") {
+                                        fcm_tokens.push(fcm_token);
+                                    }
+                                });
+                                adminSdk.messaging().sendToDevice(fcm_tokens, {
+                                    notification: {
+                                        title: "Group Invitation",
+                                        body: `${data.username} is invited you to join the group "${room_name}"`,
+                                    },
+                                });
+                            }
+                        }
+                    );
+                });
+            } else {
+                console.log("already invited");
+                callback({ msg: "Already Invited" });
+                return;
+            }
+        }
+    );
 };
 
-const onInvitationApproved = (data, invitation_id, socket, io) => {
+const onInvitationApproved = (data, invitation_id, callback, socket, io) => {
     getInvitationDetails(invitation_id).then(({ response }) => {
-        deleteInvitation(invitation_id).then(() => {
-            insertUserIntoRoom(
-                response.group_room_id,
-                response.invited_to_user_id,
-                "group",
-                response.group_room_name,
-                io
-            )
+        mysqlInstance.beginTransaction((err) => {
+            if (err) {
+                console.log("err", err.message);
+                callback();
+                return;
+            }
+            deleteInvitation(invitation_id)
                 .then(() => {
-                    console.log("inserted");
-                    io.emit("refresh_all", {
-                        type: "chat_update",
-                        changed_by: data.user_id,
+                    callback();
+                    insertUserIntoRoom(
+                        response.group_room_id,
+                        response.invited_to_user_id,
+                        "normal",
+                        io
+                    )
+                        .then(() => {
+                            mysqlInstance.commit((err) => {
+                                if (err) {
+                                    console.log("commit err", err.message);
+                                    callback();
+                                    return;
+                                }
+                                console.log("inserted");
+                                io.emit("refresh_all", {
+                                    type: "chat_update",
+                                    changed_by: data.user_id,
+                                });
+                            });
+                        })
+                        .catch((e) => {
+                            mysqlInstance.rollback(() => {
+                                console.log("error invitation", e);
+                            });
+                        });
+
+                    sendMessage(
+                        {
+                            message: `${data.username} has joined the group`,
+                            type: "admin_msg",
+                            room_id: response.group_room_id,
+                            send_at: Date.now(),
+                            from_user_id: "Admin",
+                            from_username: "Admin",
+                        },
+                        socket,
+                        io
+                    )
+                        .then(() => console.log("message sent"))
+                        .catch((e) => console.log("send msg error", e));
+
+                    fetchUserFromUserID(
+                        response.invited_by_user_id,
+                        "fcm_token"
+                    ).then(({ response }) => {
+                        adminSdk
+                            .messaging()
+                            .sendToDevice(response.fcm_token, {
+                                notification: {
+                                    title: "Group Invitation Accepted",
+                                    body: `${data.username} has accepted your invitation for joining the group ${response.group_room_name}"`,
+                                },
+                            })
+                            .then(() =>
+                                console.log("invited notification sent")
+                            )
+                            .catch(() => console.log("nahi gya"));
                     });
                 })
-                .catch((e) => console.log("error invitation", e));
-
-            sendMessage(
-                {
-                    message: `${data.username} has joined the group`,
-                    type: "admin_msg",
-                    room_id: response.group_room_id,
-                    send_at: Date.now(),
-                    from_user_id: "admin",
-                    from_user_name: "admin",
-                },
-                socket,
-                io
-            )
-                .then(() => console.log("message sent"))
-                .catch((e) => console.log("send msg error", e));
-
-            fetchUserFromUserID(response.invited_by_user_id, "fcm_token").then(
-                ({ response }) => {
-                    adminSdk.messaging().sendToDevice(response.fcm_token, {
-                        notification: {
-                            title: "Group Invitation Accepted",
-                            body: `${data.username} has accepted your invitation for joining the group ${response.group_room_name}"`,
-                        },
+                .catch((e) => {
+                    mysqlInstance.rollback(() => {
+                        console.log("delete err", e);
+                        callback();
                     });
-                }
-            );
+                    return;
+                });
         });
     });
 };
 
-const onInvitationRejected = (data, invitation_id) => {
+const onInvitationRejected = (data, invitation_id, callback) => {
     getInvitationDetails(invitation_id).then(({ response }) => {
-        deleteInvitation(invitation_id).then(() => {
-            fetchUserFromUserID(response.invited_by_user_id, "fcm_token").then(
-                ({ response }) => {
-                    adminSdk.messaging().sendToDevice(response.fcm_token, {
-                        notification: {
-                            title: "Group Invitation Rejected",
-                            body: `${data.username} has rejected your invitation for joining the group ${response.group_room_name}"`,
-                        },
+        mysqlInstance.beginTransaction((err) => {
+            if (err) {
+                console.log("err", err.message);
+                callback();
+                return;
+            }
+            deleteInvitation(invitation_id)
+                .then(() => {
+                    mysqlInstance.commit((err) => {
+                        if (err) {
+                            console.log("commit err", err.message);
+                            callback();
+                            return;
+                        }
+                        callback();
+                        fetchUserFromUserID(
+                            response.invited_by_user_id,
+                            "fcm_token"
+                        ).then(({ response }) => {
+                            adminSdk
+                                .messaging()
+                                .sendToDevice(response.fcm_token, {
+                                    notification: {
+                                        title: "Group Invitation Rejected",
+                                        body: `${data.username} has rejected your invitation for joining the group ${response.group_room_name}"`,
+                                    },
+                                })
+                                .then(() =>
+                                    console.log("invited notification sent")
+                                )
+                                .catch(() => console.log("nahi gya"));
+                        });
                     });
-                }
-            );
+                })
+                .catch((e) => {
+                    mysqlInstance.rollback(() => {
+                        console.log("delete err", e);
+                        callback();
+                    });
+                    return;
+                });
         });
     });
 };

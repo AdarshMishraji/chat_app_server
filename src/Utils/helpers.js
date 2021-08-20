@@ -705,26 +705,42 @@ const setActiveStatus = (user_id, status) => {
 const addInvitation = (
     invited_by_user_id,
     invited_by_username,
-    invited_to_user_id,
-    invited_to_username,
+    invited_to_users,
     group_room_id,
     group_room_name
 ) => {
     return new Promise((resolve, reject) => {
-        const invitation_id = uuidV4();
-        mysqlInstance.query(
-            `insert into group_room_invites_table values ("${invitation_id}", "${invited_by_user_id}","${invited_by_username}", "${invited_to_user_id}", "${invited_to_username}", "${group_room_id}", "${group_room_name}")`,
-            (error1, response1) => {
-                if (error1) {
-                    console.log("insert invite", error1.message);
-                    reject({ error: error1.message });
-                    return;
-                }
-                console.log("invited", response1.affectedRows);
-                resolve({ message: "invited" });
+        let values = invited_to_users.map((user) => {
+            return `("${uuidv4()}", "${Date.now()}", "${invited_by_user_id}", "${invited_by_username}", 
+            "${user.user_id}", 
+            "${user.username}", "${group_room_id}", "${group_room_name}")`;
+        });
+        const query = `insert into group_room_invites_table values ${values}`;
+        console.log(query);
+        mysqlInstance.beginTransaction((err) => {
+            if (err) {
+                reject({ error: err.message });
                 return;
             }
-        );
+            mysqlInstance.query(query, (error1, response1) => {
+                if (error1) {
+                    console.log("insert invite", error1.message);
+                    mysqlInstance.rollback(() => {
+                        reject({ error: error1.message });
+                    });
+                    return;
+                }
+                mysqlInstance.commit((err) => {
+                    if (err) {
+                        reject({ error: error1.message });
+                        return;
+                    }
+                    console.log("invited", response1.affectedRows);
+                    resolve({ message: "invited" });
+                });
+                return;
+            });
+        });
     });
 };
 
@@ -758,6 +774,27 @@ const getInvitationDetails = (invitation_id) => {
                 }
                 console.log("invitation deleted", response1[0]);
                 resolve({ response: response1[0] });
+                return;
+            }
+        );
+    });
+};
+
+const allInvitations = (user_id) => {
+    return new Promise((resolve, reject) => {
+        console.log(
+            `select * from group_room_invites_table where invited_to_user_id = "${user_id}"`
+        );
+        mysqlInstance.query(
+            `select * from group_room_invites_table where invited_to_user_id = "${user_id}"`,
+            (error1, response1) => {
+                if (error1) {
+                    console.log("select invite", error1.message);
+                    reject({ error: error1.message });
+                    return;
+                }
+                console.log("invitations", response1);
+                resolve({ response: response1 });
                 return;
             }
         );
@@ -865,6 +902,37 @@ const setRoomMessagesSeen = (
     });
 };
 
+const renameRoom = (new_name, room_id, io) => {
+    try {
+        mysqlInstance.beginTransaction((err) => {
+            if (err) throw err.message;
+            mysqlInstance.query(
+                `update rooms_table set room_name = "${new_name}" where room_id = "${room_id}"`,
+                (err, res) => {
+                    if (err) {
+                        mysqlInstance.rollback(() => {
+                            throw err.message;
+                        });
+                    }
+                    console.log("room renamed", res.affectedRows);
+                    mysqlInstance.commit((err) => {
+                        if (err) throw err.message;
+
+                        console.log("commited");
+                        io.emit("refresh_all", {
+                            changed_by: null,
+                            type: "chat_update",
+                        });
+                        return;
+                    });
+                }
+            );
+        });
+    } catch (e) {
+        console.log("rename group error", e);
+    }
+};
+
 module.exports = {
     getUserDataFromJWT,
     verifyToken,
@@ -884,5 +952,7 @@ module.exports = {
     addInvitation,
     deleteInvitation,
     getInvitationDetails,
+    allInvitations,
     setRoomMessagesSeen,
+    renameRoom,
 };

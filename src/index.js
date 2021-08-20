@@ -26,6 +26,8 @@ const {
     fetchAllUsers,
     setRoomMessagesSeen,
     fetchCommonRoomAndJoinedUsers,
+    renameRoom,
+    allInvitations,
 } = require("./Utils/helpers");
 
 dotenv.config();
@@ -215,25 +217,37 @@ io.on("connection", (socket) => {
         onMakeAdmin(user_details, user_id, room_id, io, callback);
     });
 
+    socket.on("rename_room", ({ room_id, room_name }) => {
+        renameRoom(room_name, room_id, io);
+    });
+
     socket.on(
         "invite_user",
-        ({ room_id, room_name, invited_to_user_id, invited_to_username }) => {
+        ({ group_room_id, group_room_name, invited_to_users }, callback) => {
             onInviteUser(
                 user_details,
-                room_id,
-                room_name,
-                invited_to_user_id,
-                invited_to_username
+                group_room_id,
+                group_room_name,
+                invited_to_users,
+                callback
             );
         }
     );
 
-    socket.on("invitation_approved", ({ invitation_id }) => {
-        onInvitationApproved(user_details, invitation_id, socket, io);
+    socket.on("all_invitation_request", (callback) => {
+        allInvitations(user_details.user_id)
+            .then(({ response }) => {
+                callback({ response });
+            })
+            .catch({ error: "Error" });
     });
 
-    socket.on("invitation_rejected", ({ invitation_id }) => {
-        onInvitationRejected(user_details, invitation_id);
+    socket.on("invitation_approved", ({ invitation_id }, callback) => {
+        onInvitationApproved(user_details, invitation_id, callback, socket, io);
+    });
+
+    socket.on("invitation_rejected", ({ invitation_id }, callback) => {
+        onInvitationRejected(user_details, invitation_id, callback);
     });
 
     socket.on("disconnect", () => {
