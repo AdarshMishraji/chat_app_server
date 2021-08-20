@@ -414,7 +414,9 @@ const fetchCommonRoomAndJoinedUsers = (my_user_id) => {
                             });
                         }
                         new_res.sort(
-                            (a, b) => b.last_msg.send_at - a.last_msg.send_at
+                            (a, b) =>
+                                (b.last_msg ? b.last_msg.send_at : 0) -
+                                (a.last_msg ? a.last_msg.send_at : 0)
                         );
                         resolve({ response: new_res });
                     });
@@ -617,34 +619,35 @@ const sendMessage = (message, socket, io) => {
                         message.room_id,
                         message.from_user_id,
                         "fcm_token"
-                    )
-                        .then(({ other_room_users }) => {
-                            io.emit("refresh_all", {
-                                changed_by: message.from_user_id,
-                                type: "chat_update",
-                            });
-                            console.log("other room users", other_room_users);
-                            const fcm_tokens = [];
-                            other_room_users.forEach(({ fcm_token }) => {
-                                if (fcm_token !== "") {
-                                    fcm_tokens.push(fcm_token);
-                                }
-                            });
-                            let title =
-                                message.type === "reply_text"
-                                    ? message.from_username + " replied"
-                                    : "New Message from " +
-                                      message.from_username;
-                            if (fcm_tokens.length > 0)
-                                adminSdk.messaging().sendToDevice(fcm_tokens, {
+                    ).then(({ other_room_users }) => {
+                        io.emit("refresh_all", {
+                            changed_by: message.from_user_id,
+                            type: "chat_update",
+                        });
+                        console.log("other room users", other_room_users);
+                        const fcm_tokens = [];
+                        other_room_users.forEach(({ fcm_token }) => {
+                            if (fcm_token !== "") {
+                                fcm_tokens.push(fcm_token);
+                            }
+                        });
+                        let title =
+                            message.type === "reply_text"
+                                ? message.from_username + " replied"
+                                : "New Message from " + message.from_username;
+                        console.log("fcm_tokens", fcm_tokens);
+                        if (fcm_tokens.length > 0)
+                            adminSdk
+                                .messaging()
+                                .sendToDevice(fcm_tokens, {
                                     notification: {
                                         title,
                                         body: message.message,
                                     },
-                                });
-                        })
-                        .then((a) => console.log(a))
-                        .catch((e) => console.log(e));
+                                })
+                                .then((a) => console.log(a))
+                                .catch((e) => console.log(e));
+                    });
                 });
             });
         });
