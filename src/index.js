@@ -88,12 +88,9 @@ io.on("connection", (socket) => {
     const user_details = getUserDataFromJWT(token);
     console.log("new web socket connection");
 
-    // socket.on("ping", (a) => {
-    //     console.log("ping");
-    //     setTimeout(() => {
-    //         socket.emit("ping", a);
-    //     }, 1000);
-    // });
+    socket.on("ping", (a) => {
+        socket.emit("ping", a);
+    });
 
     // common handlers
     socket.on("user_joined", () => {
