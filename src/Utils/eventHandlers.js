@@ -21,26 +21,21 @@ const onUserJoined = (data, socket) => {
     setActiveStatus(data.user_id, "online")
         .then(() => console.log("set active status", data.user_id, "online"))
         .catch((e) => console.log("set active status error", e));
-    fetchCommonRoomAndJoinedUsers(data.user_id)
-        .then(({ response }) => {
-            console.log("then");
-            const room_ids = response.map((res) => {
-                return res.room_id;
-            });
-            socket.join(room_ids);
-            console.log(socket.rooms);
-            socket.emit("room_people_data", { response });
-        })
-        .catch((e) => {
-            console.log("error", e);
-            socket.emit("fetch_error", { error: e });
+
+    const promises = [
+        fetchCommonRoomAndJoinedUsers(data.user_id),
+        fetchAllUsers(data.user_id),
+    ];
+    Promise.all(promises).then((res) => {
+        console.log("user joined promise all", res[0], res[1]);
+        let room_data = res[0].response;
+        let users = res[1].response;
+        const room_ids = room_data.map((resp) => {
+            return resp.room_id;
         });
-    fetchAllUsers(data.user_id)
-        .then(({ response }) => {
-            console.log(response);
-            socket.emit("all_users", { users: response });
-        })
-        .catch((e) => socket.emit("fetch_error", { error: e }));
+        socket.join(room_ids);
+        socket.emit("on_user_joined", { room_data, users });
+    });
 };
 
 const onJoinWithUsers = (user_id, data, groupName, socket, io) => {
