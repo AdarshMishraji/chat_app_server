@@ -328,7 +328,15 @@ const fetchAllUsers = (user_id) => {
                     reject({ error: error.message });
                     return;
                 }
-                resolve({ response: response });
+                const res = {};
+                response.map((ele) => {
+                    res[ele.user_id] = {
+                        username: ele.username,
+                        name: ele.name,
+                        active_status: ele.active_status,
+                    };
+                });
+                resolve({ response: res });
                 return;
             }
         );
