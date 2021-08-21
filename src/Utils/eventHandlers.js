@@ -53,7 +53,7 @@ const onJoinWithUsers = (user_id, data, groupName, socket, io) => {
                 console.log(socket.rooms);
                 sendMessage(
                     {
-                        message: `${data.username} has created the group`,
+                        message: `${data.username} has created the group ${groupName}`,
                         type: "admin_msg",
                         room_id,
                         send_at: Date.now(),
