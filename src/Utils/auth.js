@@ -124,26 +124,54 @@ app.post("/login", (req, res) => {
                 //     });
                 //     return;
                 // }
-                const { user_id, username, password, name } = response1[0];
-                if (bcrypt.compare(password, response1[0].password)) {
-                    const token = jwt.sign(
-                        { user_id, username, password, name, fcm_token },
-                        process.env.SECRET_KEY
-                    );
-                    updateToken(token, user_id)
-                        .then(({ response: response2 }) => {
-                            mysqlInstance.commit();
-                            res.status(200).send({
-                                message: "User login completed successfully",
-                                token,
-                                user: { user_id, username, password, name },
+                const {
+                    user_id,
+                    username,
+                    password: hashedPassword,
+                    name,
+                } = response1[0];
+                bcrypt
+                    .compare(password, hashedPassword)
+                    .then((isSame) => {
+                        console.log(isSame);
+                        if (isSame) {
+                            const token = jwt.sign(
+                                {
+                                    user_id,
+                                    username,
+                                    password: hashedPassword,
+                                    name,
+                                    fcm_token,
+                                },
+                                process.env.SECRET_KEY
+                            );
+                            updateToken(token, user_id)
+                                .then(({ response: response2 }) => {
+                                    mysqlInstance.commit();
+                                    res.status(200).send({
+                                        message:
+                                            "User login completed successfully",
+                                        token,
+                                        user: {
+                                            user_id,
+                                            username,
+                                            name,
+                                        },
+                                    });
+                                    return;
+                                })
+                                .catch((e) => {
+                                    throw e;
+                                });
+                        } else {
+                            res.status(403).send({
+                                error: "Incorrect Password",
                             });
-                            return;
-                        })
-                        .catch((e) => {
-                            throw e;
-                        });
-                }
+                        }
+                    })
+                    .catch((e) => {
+                        throw e;
+                    });
             })
             .catch((e) => {
                 console.log("search user while login", e);
