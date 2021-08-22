@@ -944,6 +944,42 @@ const renameRoom = (new_name, room_id, io) => {
     }
 };
 
+const checkAndUpdateOnlineStatus = (my_user_id, io) => {
+    try {
+        mysqlInstance.query(
+            `select * from online_users where user_id = "${my_user_id}"`,
+            (err, res) => {
+                if (err) throw err;
+                if (res.length === 0) {
+                    mysqlInstance.beginTransaction((err) => {
+                        if (err) throw err;
+                        setActiveStatus(my_user_id, "online")
+                            .then(() => {
+                                mysqlInstance.commit((err) => {
+                                    if (err) throw err;
+                                    console.log(
+                                        "commited, set offline to online"
+                                    );
+                                    io.emit("refresh_all", {
+                                        changed_by: user_details.user_id,
+                                        type: "active_status",
+                                    });
+                                });
+                            })
+                            .catch((e) => {
+                                mysqlInstance.rollback(() => {
+                                    console.log("rollbacked");
+                                });
+                            });
+                    });
+                }
+            }
+        );
+    } catch (e) {
+        console.log("check update active error", e);
+    }
+};
+
 module.exports = {
     getUserDataFromJWT,
     verifyToken,
@@ -966,4 +1002,5 @@ module.exports = {
     allInvitations,
     setRoomMessagesSeen,
     renameRoom,
+    checkAndUpdateOnlineStatus,
 };

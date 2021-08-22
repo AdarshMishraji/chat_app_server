@@ -28,6 +28,7 @@ const {
     fetchCommonRoomAndJoinedUsers,
     renameRoom,
     allInvitations,
+    checkAndUpdateOnlineStatus,
 } = require("./Utils/helpers");
 
 dotenv.config();
@@ -104,10 +105,12 @@ io.on("connection", (socket) => {
     // message/room handlers
     socket.on("join_with_user", ({ user_id, groupName }) => {
         onJoinWithUsers(user_id, user_details, groupName, socket, io);
+        checkAndUpdateOnlineStatus(user_details.user_id, io);
     });
 
     socket.on("room_request", () => {
         onRoomRequest(user_details, socket);
+        checkAndUpdateOnlineStatus(user_details.user_id, io);
     });
 
     socket.on("all_users_request", () => {
@@ -117,6 +120,7 @@ io.on("connection", (socket) => {
                 socket.emit("all_users", { users: response });
             })
             .catch((e) => socket.emit("fetch_error", { error: e }));
+        checkAndUpdateOnlineStatus(user_details.user_id, io);
     });
 
     socket.on("my_rooms_request", () => {
@@ -133,6 +137,7 @@ io.on("connection", (socket) => {
                 console.log("error", e);
                 socket.emit("fetch_error", { error: e });
             });
+        checkAndUpdateOnlineStatus(user_details.user_id, io);
     });
 
     socket.on("room_messages_request", ({ room_id, limit }, callback) => {
@@ -144,14 +149,17 @@ io.on("connection", (socket) => {
                 console.log("error rmr", e);
                 callback({ error: e });
             });
+        checkAndUpdateOnlineStatus(user_details.user_id, io);
     });
 
     socket.on("room_message_send", ({ message }, callback) => {
         onMessageRecieved(message, socket, io, callback);
+        checkAndUpdateOnlineStatus(user_details.user_id, io);
     });
 
     socket.on("seen_the_unseen_messages", ({ room_id, should_allow_seen }) => {
         setRoomMessagesSeen(room_id, user_details, should_allow_seen, socket);
+        checkAndUpdateOnlineStatus(user_details.user_id, io);
     });
 
     socket.on("delete_message", ({ room_id, message_id }, callback) => {
@@ -167,6 +175,7 @@ io.on("connection", (socket) => {
                 callback({ messages });
             })
             .catch((e) => callback({ error: e }));
+        checkAndUpdateOnlineStatus(user_details.user_id, io);
     });
 
     socket.on("delete_room", ({ room_id }, callback) => {
@@ -178,6 +187,7 @@ io.on("connection", (socket) => {
                 io.emit("refresh_all", { changed_by: user_details.user_id });
             })
             .catch((e) => callback({ message: e }));
+        checkAndUpdateOnlineStatus(user_details.user_id, io);
     });
 
     // call handlers
@@ -212,10 +222,12 @@ io.on("connection", (socket) => {
 
     socket.on("make_admin", ({ user_id, room_id }, callback) => {
         onMakeAdmin(user_details, user_id, room_id, io, callback);
+        checkAndUpdateOnlineStatus(user_details.user_id, io);
     });
 
     socket.on("rename_room", ({ room_id, room_name }) => {
         renameRoom(room_name, room_id, io);
+        checkAndUpdateOnlineStatus(user_details.user_id, io);
     });
 
     socket.on(
@@ -228,6 +240,7 @@ io.on("connection", (socket) => {
                 invited_to_users,
                 callback
             );
+            checkAndUpdateOnlineStatus(user_details.user_id, io);
         }
     );
 
@@ -237,14 +250,17 @@ io.on("connection", (socket) => {
                 callback({ response });
             })
             .catch({ error: "Error" });
+        checkAndUpdateOnlineStatus(user_details.user_id, io);
     });
 
     socket.on("invitation_approved", ({ invitation_id }, callback) => {
         onInvitationApproved(user_details, invitation_id, callback, socket, io);
+        checkAndUpdateOnlineStatus(user_details.user_id, io);
     });
 
     socket.on("invitation_rejected", ({ invitation_id }, callback) => {
         onInvitationRejected(user_details, invitation_id, callback);
+        checkAndUpdateOnlineStatus(user_details.user_id, io);
     });
 
     socket.on("disconnect", () => {

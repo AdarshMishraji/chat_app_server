@@ -336,12 +336,11 @@ const onInvitationApproved = (data, invitation_id, callback, socket, io) => {
         mysqlInstance.beginTransaction((err) => {
             if (err) {
                 console.log("err", err.message);
-                callback();
+                callback({ error: err.message });
                 return;
             }
             deleteInvitation(invitation_id)
                 .then(() => {
-                    callback();
                     insertUserIntoRoom(
                         response.group_room_id,
                         response.invited_to_user_id,
@@ -352,9 +351,10 @@ const onInvitationApproved = (data, invitation_id, callback, socket, io) => {
                             mysqlInstance.commit((err) => {
                                 if (err) {
                                     console.log("commit err", err.message);
-                                    callback();
+                                    callback({ error: err.message });
                                     return;
                                 }
+                                callback();
                                 console.log("inserted");
                                 io.emit("refresh_all", {
                                     type: "chat_update",
@@ -404,7 +404,7 @@ const onInvitationApproved = (data, invitation_id, callback, socket, io) => {
                 .catch((e) => {
                     mysqlInstance.rollback(() => {
                         console.log("delete err", e);
-                        callback();
+                        callback({ error: e });
                     });
                     return;
                 });
@@ -417,7 +417,7 @@ const onInvitationRejected = (data, invitation_id, callback) => {
         mysqlInstance.beginTransaction((err) => {
             if (err) {
                 console.log("err", err.message);
-                callback();
+                callback({ error: err.message });
                 return;
             }
             deleteInvitation(invitation_id)
@@ -425,7 +425,7 @@ const onInvitationRejected = (data, invitation_id, callback) => {
                     mysqlInstance.commit((err) => {
                         if (err) {
                             console.log("commit err", err.message);
-                            callback();
+                            callback({ error: err.message });
                             return;
                         }
                         callback();
@@ -451,7 +451,7 @@ const onInvitationRejected = (data, invitation_id, callback) => {
                 .catch((e) => {
                     mysqlInstance.rollback(() => {
                         console.log("delete err", e);
-                        callback();
+                        callback({ error: e });
                     });
                     return;
                 });
