@@ -191,7 +191,7 @@ const fetchRoomMessages = (room_id, limit) => {
                 reject({ error: error1.message });
                 return;
             }
-            response1.reverse();
+            response1;
             resolve({ messages: response1 });
             return;
         });
@@ -961,7 +961,7 @@ const checkAndUpdateOnlineStatus = (my_user_id, io) => {
                                         "commited, set offline to online"
                                     );
                                     io.emit("refresh_all", {
-                                        changed_by: user_details.user_id,
+                                        changed_by: my_user_id,
                                         type: "active_status",
                                     });
                                 });

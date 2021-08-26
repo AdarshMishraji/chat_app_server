@@ -78,7 +78,6 @@ app.post("/signup", (req, res) => {
                                                         user_id,
                                                         name,
                                                         username,
-                                                        password,
                                                     },
                                                 });
                                             });
