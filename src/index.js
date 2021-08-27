@@ -226,7 +226,7 @@ io.on("connection", (socket) => {
     });
 
     socket.on("rename_room", ({ room_id, room_name }) => {
-        renameRoom(room_name, room_id, io);
+        renameRoom(user_details, room_name, room_id, socket, io);
         checkAndUpdateOnlineStatus(user_details.user_id, io);
     });
 

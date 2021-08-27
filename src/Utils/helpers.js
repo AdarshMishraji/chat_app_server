@@ -913,7 +913,7 @@ const setRoomMessagesSeen = (
     });
 };
 
-const renameRoom = (new_name, room_id, io) => {
+const renameRoom = (data, new_name, room_id, socket, io) => {
     try {
         mysqlInstance.beginTransaction((err) => {
             if (err) throw err.message;
@@ -928,7 +928,18 @@ const renameRoom = (new_name, room_id, io) => {
                     console.log("room renamed", res.affectedRows);
                     mysqlInstance.commit((err) => {
                         if (err) throw err.message;
-
+                        sendMessage(
+                            {
+                                message: `${data.username} has changed the group name to ${new_name}`,
+                                room_id,
+                                type: "admin_msg",
+                                send_at: Date.now(),
+                                from_user_id: "Admin",
+                                from_username: "Admin",
+                            },
+                            socket,
+                            io
+                        );
                         console.log("commited");
                         io.emit("refresh_all", {
                             changed_by: null,
